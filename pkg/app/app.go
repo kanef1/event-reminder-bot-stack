@@ -142,7 +142,7 @@ func (a *App) registerMetadata() {
 
 func (a *App) cleanupPastEvents() error {
 	_, err := a.dbc.ExecContext(context.Background(),
-		"UPDATE events SET \"statusId\" = ? WHERE \"sendAt\" < NOW() AND \"statusId\" = ?",
+		"UPDATE events SET \"statusId\" = ? WHERE \"sendAt\" < NOW() AND \"statusId\" = ? AND periodicity IS NULL",
 		db.StatusDeleted, db.StatusEnabled)
 	return err
 }
@@ -156,16 +156,31 @@ func (a *App) restoreReminders(ctx context.Context) {
 	}
 
 	for _, e := range events {
-		if e.SendAt.After(time.Now()) {
-			event := reminder.Event{
-				ID:         e.ID,
-				OriginalID: e.ID,
-				ChatID:     e.UserTgID,
-				Text:       e.Message,
-				DateTime:   e.SendAt,
-			}
-			a.rm.ScheduleReminder(ctx, event)
-			a.Printf("Восстановлено напоминание: ID=%d", e.ID)
+		// Восстанавливаем как активные события, так и периодические, которые могли "проспать"
+		reminderEvent := reminder.Event{
+			ID:          e.ID,
+			OriginalID:  e.ID,
+			ChatID:      e.UserTgID,
+			Text:        e.Message,
+			DateTime:    e.SendAt,
+			Weekdays:    e.Weekdays,
+			Periodicity: e.Periodicity,
 		}
+
+		// Для периодических событий, время которых уже прошло, вычисляем следующее время
+		if e.Periodicity != nil && e.SendAt.Before(time.Now()) {
+			nextTime := a.rm.CalculateNextTime(reminderEvent) // Добавьте этот метод в ReminderManager
+			if !nextTime.IsZero() {
+				// Обновляем время в базе
+				a.eventsRepo.UpdateEvent(ctx, &db.Event{
+					ID:     e.ID,
+					SendAt: nextTime,
+				}, db.WithColumns("sendAt"))
+				reminderEvent.DateTime = nextTime
+			}
+		}
+
+		a.rm.ScheduleReminder(ctx, reminderEvent)
+		a.Printf("Восстановлено напоминание: ID=%d", e.ID)
 	}
 }

@@ -55,14 +55,16 @@ type Searcher interface {
 type EventSearch struct {
 	search
 
-	ID           *int
-	UserTgID     *int64
-	Message      *string
-	SendAt       *time.Time
-	CreatedAt    *time.Time
-	StatusID     *int
-	IDs          []int
-	MessageILike *string
+	ID               *int
+	UserTgID         *int64
+	Message          *string
+	SendAt           *time.Time
+	CreatedAt        *time.Time
+	StatusID         *int
+	Periodicity      *string
+	IDs              []int
+	MessageILike     *string
+	PeriodicityILike *string
 }
 
 func (es *EventSearch) Apply(query *orm.Query) *orm.Query {
@@ -87,11 +89,17 @@ func (es *EventSearch) Apply(query *orm.Query) *orm.Query {
 	if es.StatusID != nil {
 		es.where(query, Tables.Event.Alias, Columns.Event.StatusID, es.StatusID)
 	}
+	if es.Periodicity != nil {
+		es.where(query, Tables.Event.Alias, Columns.Event.Periodicity, es.Periodicity)
+	}
 	if len(es.IDs) > 0 {
 		Filter{Columns.Event.ID, es.IDs, SearchTypeArray, false}.Apply(query)
 	}
 	if es.MessageILike != nil {
 		Filter{Columns.Event.Message, *es.MessageILike, SearchTypeILike, false}.Apply(query)
+	}
+	if es.PeriodicityILike != nil {
+		Filter{Columns.Event.Periodicity, *es.PeriodicityILike, SearchTypeILike, false}.Apply(query)
 	}
 
 	es.apply(query)

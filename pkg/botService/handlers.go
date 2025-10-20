@@ -12,6 +12,14 @@ import (
 	"github.com/go-telegram/bot/models"
 )
 
+const (
+	startCommand  = "/start"
+	helpCommand   = "/help"
+	addCommand    = "/add"
+	listCommand   = "/list"
+	deleteCommand = "/delete"
+)
+
 type BotService struct {
 	b  *bot.Bot
 	bm *botManager.BotManager
@@ -23,11 +31,18 @@ func NewBotService(b *bot.Bot, bm *botManager.BotManager, rm *reminder.ReminderM
 }
 
 func (bs *BotService) RegisterHandlers() {
-	bs.b.RegisterHandler(bot.HandlerTypeMessageText, "/start", bot.MatchTypeExact, botManager.StartHandler)
-	bs.b.RegisterHandler(bot.HandlerTypeMessageText, "/help", bot.MatchTypeExact, botManager.HelpHandler)
-	bs.b.RegisterHandler(bot.HandlerTypeMessageText, "/add", bot.MatchTypePrefix, bs.AddHandler)
-	bs.b.RegisterHandler(bot.HandlerTypeMessageText, "/list", bot.MatchTypeExact, bs.listHandler)
-	bs.b.RegisterHandler(bot.HandlerTypeMessageText, "/delete", bot.MatchTypePrefix, bs.deleteHandler)
+	bs.b.RegisterHandler(bot.HandlerTypeMessageText, startCommand, bot.MatchTypeExact, botManager.StartHandler)
+	bs.b.RegisterHandler(bot.HandlerTypeMessageText, helpCommand, bot.MatchTypeExact, botManager.HelpHandler)
+	bs.b.RegisterHandler(bot.HandlerTypeMessageText, addCommand, bot.MatchTypePrefix, bs.AddHandler)
+	bs.b.RegisterHandler(bot.HandlerTypeMessageText, listCommand, bot.MatchTypeExact, bs.listHandler)
+	bs.b.RegisterHandler(bot.HandlerTypeMessageText, deleteCommand, bot.MatchTypePrefix, bs.deleteHandler)
+	bs.b.RegisterHandler(bot.HandlerTypeCallbackQueryData, "period:", bot.MatchTypePrefix, bs.callbackHandler)
+	bs.b.RegisterHandler(bot.HandlerTypeCallbackQueryData, "weekday:", bot.MatchTypePrefix, bs.callbackHandler)
+	bs.b.RegisterHandler(bot.HandlerTypeCallbackQueryData, "weekdays_done:", bot.MatchTypePrefix, bs.callbackHandler)
+}
+
+func (bs *BotService) callbackHandler(ctx context.Context, b *bot.Bot, update *models.Update) {
+	bs.bm.HandleCallback(ctx, b, update)
 }
 
 func (bs *BotService) deleteHandler(ctx context.Context, b *bot.Bot, update *models.Update) {
