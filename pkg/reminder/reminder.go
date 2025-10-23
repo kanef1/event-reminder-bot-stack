@@ -16,8 +16,8 @@ type Event struct {
 	ChatID      int64
 	Text        string
 	DateTime    time.Time
-	Weekdays    []int   // Добавьте это поле
-	Periodicity *string // Добавьте это поле
+	Weekdays    []int
+	Periodicity *string
 }
 
 type ReminderManager struct {
@@ -35,32 +35,27 @@ func NewReminderManager(bm *botManager.BotManager, eventsRepo db.EventsRepo) *Re
 	}
 }
 
-// calculateNextTime вычисляет следующее время для периодического события
 func (rm *ReminderManager) calculateNextTime(e Event) time.Time {
 	if e.Periodicity == nil {
 		return time.Time{}
 	}
 
-	// Удалите неиспользуемую переменную now или используйте ее
 	currentTime := e.DateTime
 
-	return currentTime.Add(time.Minute)
-
-	//switch *e.Periodicity {
-	//case "hour":
-	//	return currentTime.Add(time.Hour)
-	//case "day":
-	//	return currentTime.Add(24 * time.Hour)
-	//case "week":
-	//	return currentTime.Add(7 * 24 * time.Hour)
-	//case "weekdays":
-	//	return rm.calculateNextWeekday(currentTime, e.Weekdays) // Теперь Weekdays доступно
-	//default:
-	//	return time.Time{}
-	//}
+	switch *e.Periodicity {
+	case "hour":
+		return currentTime.Add(time.Minute)
+	case "day":
+		return currentTime.Add(24 * time.Hour)
+	case "week":
+		return currentTime.Add(7 * 24 * time.Hour)
+	case "weekdays":
+		return rm.calculateNextWeekday(currentTime, e.Weekdays)
+	default:
+		return time.Time{}
+	}
 }
 
-// calculateNextWeekday вычисляет следующий подходящий день недели
 func (rm *ReminderManager) calculateNextWeekday(currentTime time.Time, weekdays []int) time.Time {
 	if len(weekdays) == 0 {
 		return time.Time{}
@@ -68,10 +63,10 @@ func (rm *ReminderManager) calculateNextWeekday(currentTime time.Time, weekdays 
 
 	nextTime := currentTime.Add(24 * time.Hour)
 
-	for i := 0; i < 7; i++ {
+	for i := 1; i < 8; i++ {
 		weekday := int(nextTime.Weekday())
 		if weekday == 0 {
-			weekday = 6
+			weekday = 7
 		} else {
 			weekday = weekday - 1
 		}
@@ -88,9 +83,8 @@ func (rm *ReminderManager) calculateNextWeekday(currentTime time.Time, weekdays 
 	return time.Time{}
 }
 
-func (rm *ReminderManager) ScheduleReminder(ctx context.Context, e Event) context.CancelFunc {
-	loc := GetMoscowLocation()
-	now := time.Now().In(loc)
+func (rm *ReminderManager) ScheduleReminder(parentCtx context.Context, e Event) context.CancelFunc {
+	now := time.Now()
 
 	duration := e.DateTime.Sub(now)
 
@@ -98,72 +92,69 @@ func (rm *ReminderManager) ScheduleReminder(ctx context.Context, e Event) contex
 		if e.Periodicity != nil {
 			nextTime := rm.calculateNextTime(e)
 			if !nextTime.IsZero() {
-				rm.updateEventTime(ctx, e.ID, nextTime)
+				rm.updateEventTime(parentCtx, e.ID, nextTime)
 				newEvent := e
 				newEvent.DateTime = nextTime
-				return rm.ScheduleReminder(ctx, newEvent)
+				return rm.ScheduleReminder(parentCtx, newEvent)
 			}
 		}
 		return nil
 	}
 
-	ctx, cancel := context.WithCancel(ctx)
+	childCtx, cancel := context.WithCancel(parentCtx)
 
 	rm.mu.Lock()
 	rm.cancels[e.ID] = cancel
 	rm.mu.Unlock()
 
-	go func() {
+	go func(pCtx context.Context, cCtx context.Context, ev Event, d time.Duration) {
 		defer func() {
 			rm.mu.Lock()
-			delete(rm.cancels, e.ID)
+			delete(rm.cancels, ev.ID)
 			rm.mu.Unlock()
 			cancel()
 		}()
 
 		select {
-		case <-time.After(duration):
-			dbEvent, err := rm.eventsRepo.EventByID(ctx, e.ID)
+		case <-time.After(d):
+			dbEvent, err := rm.eventsRepo.EventByID(pCtx, ev.ID)
 			if err != nil {
 				return
 			}
 
 			if dbEvent != nil && dbEvent.StatusID == db.StatusEnabled {
-				rm.bm.SendReminder(ctx, e.ChatID, e.Text)
+				rm.bm.SendReminder(pCtx, ev.ChatID, ev.Text)
 
 				if dbEvent.Periodicity != nil {
 					reminderEvent := convertDBToReminderEvent(*dbEvent)
 					nextTime := rm.calculateNextTime(reminderEvent)
 					if !nextTime.IsZero() {
-						rm.updateEventTime(ctx, e.ID, nextTime)
+						rm.updateEventTime(pCtx, ev.ID, nextTime)
 						newEvent := reminderEvent
 						newEvent.DateTime = nextTime
-						rm.ScheduleReminder(ctx, newEvent)
+						rm.ScheduleReminder(pCtx, newEvent)
 					} else {
-						rm.deactivateEvent(ctx, e.ID)
+						rm.deactivateEvent(pCtx, ev.ID)
 					}
 				} else {
-					rm.deactivateEvent(ctx, e.ID)
+					rm.deactivateEvent(pCtx, ev.ID)
 				}
 			}
-
-		case <-ctx.Done():
+		case <-cCtx.Done():
 			return
 		}
-	}()
+	}(parentCtx, childCtx, e, duration)
 
 	return cancel
 }
 
-// convertDBToReminderEvent конвертирует db.Event в reminder.Event с московским временем
 func convertDBToReminderEvent(dbEvent db.Event) Event {
-	loc := GetMoscowLocation()
 	return Event{
 		ID:          dbEvent.ID,
 		OriginalID:  dbEvent.ID,
 		ChatID:      dbEvent.UserTgID,
 		Text:        dbEvent.Message,
-		DateTime:    dbEvent.SendAt.In(loc),
+		DateTime:    dbEvent.SendAt,
 		Weekdays:    dbEvent.Weekdays,
 		Periodicity: dbEvent.Periodicity,
 	}
@@ -179,7 +170,6 @@ func (rm *ReminderManager) deactivateEvent(ctx context.Context, eventID int) {
 	}
 }
 
-// updateEventTime обновляет время события в базе данных
 func (rm *ReminderManager) updateEventTime(ctx context.Context, eventID int, newTime time.Time) {
 	dbEvent := &db.Event{
 		ID:     eventID,
@@ -202,12 +192,4 @@ func contains(slice []int, item int) bool {
 
 func (rm *ReminderManager) CalculateNextTime(e Event) time.Time {
 	return rm.calculateNextTime(e)
-}
-
-func GetMoscowLocation() *time.Location {
-	loc, err := time.LoadLocation("Europe/Moscow")
-	if err != nil {
-		return time.UTC // fallback
-	}
-	return loc
 }

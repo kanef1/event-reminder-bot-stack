@@ -81,7 +81,6 @@ func New(appName string, sl embedlog.Logger, cfg Config, database db.DB, dbc *pg
 	return a
 }
 
-// Run is a function that runs application.
 func (a *App) Run(ctx context.Context) error {
 	a.registerMetrics()
 	a.registerHandlers()
@@ -105,7 +104,6 @@ func (a *App) Run(ctx context.Context) error {
 	return a.runHTTPServer(ctx, a.cfg.Server.Host, a.cfg.Server.Port)
 }
 
-// Shutdown is a function that gracefully stops HTTP server.
 func (a *App) Shutdown(timeout time.Duration) error {
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
@@ -141,10 +139,7 @@ func (a *App) registerMetadata() {
 }
 
 func (a *App) cleanupPastEvents() error {
-	_, err := a.dbc.ExecContext(context.Background(),
-		"UPDATE events SET \"statusId\" = ? WHERE \"sendAt\" < NOW() AND \"statusId\" = ? AND periodicity IS NULL",
-		db.StatusDeleted, db.StatusEnabled)
-	return err
+	return a.eventsRepo.CleanupPastEvents(context.Background())
 }
 
 func (a *App) restoreReminders(ctx context.Context) {
@@ -156,7 +151,6 @@ func (a *App) restoreReminders(ctx context.Context) {
 	}
 
 	for _, e := range events {
-		// Восстанавливаем как активные события, так и периодические, которые могли "проспать"
 		reminderEvent := reminder.Event{
 			ID:          e.ID,
 			OriginalID:  e.ID,
@@ -167,11 +161,9 @@ func (a *App) restoreReminders(ctx context.Context) {
 			Periodicity: e.Periodicity,
 		}
 
-		// Для периодических событий, время которых уже прошло, вычисляем следующее время
 		if e.Periodicity != nil && e.SendAt.Before(time.Now()) {
-			nextTime := a.rm.CalculateNextTime(reminderEvent) // Добавьте этот метод в ReminderManager
+			nextTime := a.rm.CalculateNextTime(reminderEvent)
 			if !nextTime.IsZero() {
-				// Обновляем время в базе
 				a.eventsRepo.UpdateEvent(ctx, &db.Event{
 					ID:     e.ID,
 					SendAt: nextTime,
