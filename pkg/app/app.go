@@ -65,7 +65,7 @@ func New(appName string, sl embedlog.Logger, cfg Config, database db.DB, dbc *pg
 	a.eventsRepo = db.NewEventsRepo(a.dbc)
 
 	if cfg.Bot.Token != "" {
-		b, err := bot.New(cfg.Bot.Token, bot.WithDefaultHandler(botManager.DefaultHandler))
+		b, err := bot.New(cfg.Bot.Token)
 		if err != nil {
 			a.Errorf("Ошибка инициализации бота: %v", err)
 		} else {
@@ -115,7 +115,10 @@ func (a *App) Shutdown(timeout time.Duration) error {
 	}
 
 	if a.dbc != nil {
-		a.dbc.Close()
+		err := a.dbc.Close()
+		if err != nil {
+			return err
+		}
 	}
 
 	return a.echo.Shutdown(ctx)

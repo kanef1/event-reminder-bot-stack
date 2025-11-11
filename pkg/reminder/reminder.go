@@ -62,13 +62,8 @@ func (rm *ReminderManager) ScheduleReminder(ctx context.Context, e Event) contex
 			}
 
 			if event != nil {
-				rm.bm.SendReminder(ctx, e.ChatID, e.Text)
+				rm.bm.SendReminder(ctx, e.ChatID, e.Text, e.ID)
 				log.Printf("Отправлено напоминание: ID=%d", e.ID)
-
-				err := rm.bm.DeleteEventByID(ctx, e.ID)
-				if err != nil {
-					log.Printf("Ошибка удаления события после напоминания: %v", err)
-				}
 			} else {
 				log.Printf("Событие ID=%d было удалено", e.ID)
 			}

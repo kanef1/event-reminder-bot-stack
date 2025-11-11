@@ -20,86 +20,115 @@ func DefaultHandler(ctx context.Context, b *bot.Bot, update *models.Update) {
 	if update.Message == nil {
 		return
 	}
-	b.SendMessage(ctx, &bot.SendMessageParams{
+	_, err := b.SendMessage(ctx, &bot.SendMessageParams{
 		ChatID: update.Message.Chat.ID,
 		Text:   "Нет такой команды, используйте /help чтобы посмотреть доступные команды команд",
 	})
+	if err != nil {
+		return
+	}
 }
 
 func StartHandler(ctx context.Context, b *bot.Bot, update *models.Update) {
-	b.SendMessage(ctx, &bot.SendMessageParams{
+	_, err := b.SendMessage(ctx, &bot.SendMessageParams{
 		ChatID: update.Message.Chat.ID,
 		Text: "Добрый день, данный бот предназначен для простого планирования.\n" +
 			"Список умений:\n" +
 			"Добавить событие: /add 2025-08-08 21:05 <Текст>\n" +
 			"Список событий: /list \n" +
 			"Удалить событие: /delete id\n" +
+			"Перенести событие: /snooze <id> <YYYY-MM-DD HH:MM>\n" +
 			"Список команд: /help",
 	})
+	if err != nil {
+		return
+	}
 }
 
 func HelpHandler(ctx context.Context, b *bot.Bot, update *models.Update) {
-	b.SendMessage(ctx, &bot.SendMessageParams{
+	_, err := b.SendMessage(ctx, &bot.SendMessageParams{
 		ChatID: update.Message.Chat.ID,
 		Text: "Список умений:\n" +
 			"Добавить событие: /add 2025-08-08 21:05 <Текст>\n" +
 			"Список событий: /list\n" +
 			"Удалить событие: /delete id\n" +
+			"Перенести событие: /snooze <id> <YYYY-MM-DD HH:MM>\n" +
 			"Список команд: /help",
 	})
+	if err != nil {
+		return
+	}
 }
 
 func DeleteHandler(ctx context.Context, b *bot.Bot, update *models.Update, bm *BotManager) {
 	args := strings.TrimSpace(strings.TrimPrefix(update.Message.Text, "/delete"))
 	if args == "" {
-		b.SendMessage(ctx, &bot.SendMessageParams{
+		_, err := b.SendMessage(ctx, &bot.SendMessageParams{
 			ChatID: update.Message.Chat.ID,
 			Text:   "❗ Укажите ID события, например: /delete 123",
 		})
+		if err != nil {
+			return
+		}
 		return
 	}
 
 	id, err := strconv.Atoi(args)
 	if err != nil {
-		b.SendMessage(ctx, &bot.SendMessageParams{
+		_, err := b.SendMessage(ctx, &bot.SendMessageParams{
 			ChatID: update.Message.Chat.ID,
 			Text:   "❗ ID должен быть числом",
 		})
+		if err != nil {
+			return
+		}
 		return
 	}
 
 	err = bm.DeleteEventByID(ctx, id)
 	if err != nil {
 		log.Printf("Ошибка удаления события: %v", err)
-		b.SendMessage(ctx, &bot.SendMessageParams{
+		_, err := b.SendMessage(ctx, &bot.SendMessageParams{
 			ChatID: update.Message.Chat.ID,
 			Text:   "❌ Ошибка при удалении события",
 		})
+		if err != nil {
+			return
+		}
 		return
 	}
 
-	b.SendMessage(ctx, &bot.SendMessageParams{
+	_, err = b.SendMessage(ctx, &bot.SendMessageParams{
 		ChatID: update.Message.Chat.ID,
 		Text:   "✅ Событие удалено!",
 	})
+	if err != nil {
+		return
+	}
 }
 
 func ListHandler(ctx context.Context, b *bot.Bot, update *models.Update, bm *BotManager) {
 	events, err := bm.GetUserEvents(ctx, update.Message.Chat.ID)
 	if err != nil {
 		log.Printf("Ошибка загрузки событий: %v", err)
-		b.SendMessage(ctx, &bot.SendMessageParams{
+		_, err := b.SendMessage(ctx, &bot.SendMessageParams{
 			ChatID: update.Message.Chat.ID,
 			Text:   "❌ Ошибка при загрузке событий",
 		})
+		if err != nil {
+			return
+		}
 		return
 	}
 
 	if len(events) == 0 {
-		b.SendMessage(ctx, &bot.SendMessageParams{
+		_, err := b.SendMessage(ctx, &bot.SendMessageParams{
 			ChatID: update.Message.Chat.ID,
 			Text:   "🔍 Нет событий",
 		})
+		if err != nil {
+			return
+		}
 		return
 	}
 
@@ -107,18 +136,20 @@ func ListHandler(ctx context.Context, b *bot.Bot, update *models.Update, bm *Bot
 	msg.WriteString("📅 Список событий (от ближайших):\n\n")
 	for i, e := range events {
 		msg.WriteString(fmt.Sprintf(
-			"%d. %s — %s (ID: %d)\n",
+			"%d. %s — %s\n",
 			i+1,
 			e.Text,
 			e.DateTime.Format("2006-01-02 15:04"),
-			e.ID,
 		))
 	}
 
-	b.SendMessage(ctx, &bot.SendMessageParams{
+	_, err = b.SendMessage(ctx, &bot.SendMessageParams{
 		ChatID: update.Message.Chat.ID,
 		Text:   msg.String(),
 	})
+	if err != nil {
+		return
+	}
 }
 
 type BotManager struct {
@@ -130,11 +161,30 @@ func NewBotManager(b *bot.Bot, eventsRepo db.EventsRepo) *BotManager {
 	return &BotManager{b: b, eventsRepo: eventsRepo}
 }
 
-func (bm BotManager) SendReminder(ctx context.Context, chatID int64, text string) {
-	bm.b.SendMessage(ctx, &bot.SendMessageParams{
-		ChatID: chatID,
-		Text:   "🔔 Напоминание: " + text,
+func (bm BotManager) SendReminder(ctx context.Context, chatID int64, text string, eventID int) {
+	keyboard := &models.InlineKeyboardMarkup{
+		InlineKeyboard: [][]models.InlineKeyboardButton{
+			{
+				{Text: "⏱️ 5 мин", CallbackData: fmt.Sprintf("snooze_%d_5", eventID)},
+				{Text: "⏱️ 10 мин", CallbackData: fmt.Sprintf("snooze_%d_10", eventID)},
+			},
+			{
+				{Text: "📅 Выбрать время", CallbackData: fmt.Sprintf("snooze_custom_%d", eventID)},
+			},
+			{
+				{Text: "✅ Выполнено", CallbackData: fmt.Sprintf("done_%d", eventID)},
+			},
+		},
+	}
+
+	_, err := bm.b.SendMessage(ctx, &bot.SendMessageParams{
+		ChatID:      chatID,
+		Text:        "🔔 Напоминание: " + text,
+		ReplyMarkup: keyboard,
 	})
+	if err != nil {
+		return
+	}
 }
 
 func (bm BotManager) AddEvent(ctx context.Context, chatId int64, parts []string) (*model.Event, error) {
@@ -180,7 +230,6 @@ func (bm BotManager) AddEvent(ctx context.Context, chatId int64, parts []string)
 }
 
 func (bm BotManager) DeleteEventByID(ctx context.Context, id int) error {
-	// Получаем событие из базы данных
 	event, err := bm.eventsRepo.EventByID(ctx, id)
 	if err != nil {
 		return err
@@ -190,7 +239,6 @@ func (bm BotManager) DeleteEventByID(ctx context.Context, id int) error {
 		return fmt.Errorf("event not found")
 	}
 
-	// Удаляем событие из базы данных
 	deleted, err := bm.eventsRepo.DeleteEvent(ctx, id)
 	if err != nil {
 		return err
@@ -204,7 +252,11 @@ func (bm BotManager) DeleteEventByID(ctx context.Context, id int) error {
 }
 
 func (bm BotManager) GetUserEvents(ctx context.Context, chatID int64) ([]model.Event, error) {
-	search := &db.EventSearch{UserTgID: &chatID}
+	statusId := db.StatusEnabled
+	search := &db.EventSearch{
+		UserTgID: &chatID,
+		StatusID: &statusId,
+	}
 	dbEvents, err := bm.eventsRepo.EventsByFilters(ctx, search, db.PagerNoLimit)
 	if err != nil {
 		return nil, err
@@ -245,4 +297,35 @@ func (bm BotManager) GetEventByID(ctx context.Context, id int) (*model.Event, er
 		Text:       dbEvent.Message,
 		DateTime:   dbEvent.SendAt,
 	}, nil
+}
+
+func (bm BotManager) SnoozeEvent(ctx context.Context, eventID int, userTgID int64, newTime time.Time) error {
+	event, err := bm.eventsRepo.EventByID(ctx, eventID)
+	if err != nil {
+		return err
+	}
+
+	if event == nil {
+		return fmt.Errorf("event not found")
+	}
+
+	if event.UserTgID != userTgID {
+		return fmt.Errorf("access denied")
+	}
+
+	if event.StatusID != db.StatusEnabled {
+		return fmt.Errorf("event not active")
+	}
+
+	if newTime.Before(time.Now()) {
+		return fmt.Errorf("past_date")
+	}
+
+	event.SendAt = newTime
+	_, err = bm.eventsRepo.UpdateEvent(ctx, event, db.WithColumns(db.Columns.Event.SendAt))
+	if err != nil {
+		return err
+	}
+
+	return nil
 }
