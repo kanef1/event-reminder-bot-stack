@@ -2,63 +2,64 @@ package reminder
 
 import (
 	"context"
-	"log"
+	"slices"
 	"sync"
 	"time"
 
 	"event-reminder-bot/pkg/db"
-	botManager "event-reminder-bot/pkg/event-reminder-bot"
+	"event-reminder-bot/pkg/model"
+
+	"github.com/vmkteam/embedlog"
 )
 
-type Event struct {
-	ID          int
-	OriginalID  int
-	ChatID      int64
-	Text        string
-	DateTime    time.Time
-	Weekdays    []int
-	Periodicity *string
-}
-
 type ReminderManager struct {
-	bm         *botManager.BotManager
+	embedlog.Logger
+	bm         BotMessenger
 	eventsRepo db.EventsRepo
 	cancels    map[int]context.CancelFunc
 	mu         sync.RWMutex
 }
 
-func NewReminderManager(bm *botManager.BotManager, eventsRepo db.EventsRepo) *ReminderManager {
+type BotMessenger interface {
+	SendReminder(ctx context.Context, chatID int64, text string)
+}
+
+func NewReminderManager(bm BotMessenger, eventsRepo db.EventsRepo, logger embedlog.Logger) *ReminderManager {
 	return &ReminderManager{
 		bm:         bm,
 		eventsRepo: eventsRepo,
 		cancels:    make(map[int]context.CancelFunc),
+		Logger:     logger,
 	}
 }
 
-func (rm *ReminderManager) calculateNextTime(e Event) time.Time {
+func (rm *ReminderManager) CalculateNextTime(e model.ReminderEvent) *time.Time {
 	if e.Periodicity == nil {
-		return time.Time{}
+		return nil
 	}
 
 	currentTime := e.DateTime
 
 	switch *e.Periodicity {
 	case "hour":
-		return currentTime.Add(time.Minute)
+		t := currentTime.Add(time.Minute)
+		return &t
 	case "day":
-		return currentTime.Add(24 * time.Hour)
+		t := currentTime.Add(24 * time.Hour)
+		return &t
 	case "week":
-		return currentTime.Add(7 * 24 * time.Hour)
+		t := currentTime.Add(7 * 24 * time.Hour)
+		return &t
 	case "weekdays":
 		return rm.calculateNextWeekday(currentTime, e.Weekdays)
 	default:
-		return time.Time{}
+		return nil
 	}
 }
 
-func (rm *ReminderManager) calculateNextWeekday(currentTime time.Time, weekdays []int) time.Time {
+func (rm *ReminderManager) calculateNextWeekday(currentTime time.Time, weekdays []int) *time.Time {
 	if len(weekdays) == 0 {
-		return time.Time{}
+		return nil
 	}
 
 	nextTime := currentTime.Add(24 * time.Hour)
@@ -71,30 +72,30 @@ func (rm *ReminderManager) calculateNextWeekday(currentTime time.Time, weekdays 
 			weekday = weekday - 1
 		}
 
-		if contains(weekdays, weekday) {
-			return time.Date(
+		if slices.Contains(weekdays, weekday) {
+			t := time.Date(
 				nextTime.Year(), nextTime.Month(), nextTime.Day(),
 				currentTime.Hour(), currentTime.Minute(), 0, 0, currentTime.Location(),
 			)
+			return &t
 		}
 		nextTime = nextTime.Add(24 * time.Hour)
 	}
 
-	return time.Time{}
+	return nil
 }
 
-func (rm *ReminderManager) ScheduleReminder(parentCtx context.Context, e Event) context.CancelFunc {
+func (rm *ReminderManager) ScheduleReminder(parentCtx context.Context, e model.ReminderEvent) context.CancelFunc {
 	now := time.Now()
-
 	duration := e.DateTime.Sub(now)
 
 	if duration <= 0 {
 		if e.Periodicity != nil {
-			nextTime := rm.calculateNextTime(e)
-			if !nextTime.IsZero() {
-				rm.updateEventTime(parentCtx, e.ID, nextTime)
+			nextTime := rm.CalculateNextTime(e)
+			if nextTime != nil {
+				rm.updateEventTime(parentCtx, e.ID, *nextTime)
 				newEvent := e
-				newEvent.DateTime = nextTime
+				newEvent.DateTime = *nextTime
 				return rm.ScheduleReminder(parentCtx, newEvent)
 			}
 		}
@@ -107,7 +108,7 @@ func (rm *ReminderManager) ScheduleReminder(parentCtx context.Context, e Event) 
 	rm.cancels[e.ID] = cancel
 	rm.mu.Unlock()
 
-	go func(pCtx context.Context, cCtx context.Context, ev Event, d time.Duration) {
+	go func(pCtx context.Context, cCtx context.Context, ev model.ReminderEvent, d time.Duration) {
 		defer func() {
 			rm.mu.Lock()
 			delete(rm.cancels, ev.ID)
@@ -126,18 +127,24 @@ func (rm *ReminderManager) ScheduleReminder(parentCtx context.Context, e Event) 
 				rm.bm.SendReminder(pCtx, ev.ChatID, ev.Text)
 
 				if dbEvent.Periodicity != nil {
-					reminderEvent := convertDBToReminderEvent(*dbEvent)
-					nextTime := rm.calculateNextTime(reminderEvent)
-					if !nextTime.IsZero() {
-						rm.updateEventTime(pCtx, ev.ID, nextTime)
+					reminderEvent := model.NewReminderEvent(dbEvent)
+					nextTime := rm.CalculateNextTime(reminderEvent)
+					if nextTime != nil {
+						rm.updateEventTime(pCtx, ev.ID, *nextTime)
 						newEvent := reminderEvent
-						newEvent.DateTime = nextTime
+						newEvent.DateTime = *nextTime
 						rm.ScheduleReminder(pCtx, newEvent)
 					} else {
-						rm.deactivateEvent(pCtx, ev.ID)
+						_, err := rm.eventsRepo.DeleteEvent(pCtx, ev.ID)
+						if err != nil {
+							rm.Errorf("Ошибка деактивации события %d: %v", ev.ID, err)
+						}
 					}
 				} else {
-					rm.deactivateEvent(pCtx, ev.ID)
+					_, err := rm.eventsRepo.DeleteEvent(pCtx, ev.ID)
+					if err != nil {
+						rm.Errorf("Ошибка деактивации события %d: %v", ev.ID, err)
+					}
 				}
 			}
 		case <-cCtx.Done():
@@ -148,28 +155,6 @@ func (rm *ReminderManager) ScheduleReminder(parentCtx context.Context, e Event) 
 	return cancel
 }
 
-func convertDBToReminderEvent(dbEvent db.Event) Event {
-	return Event{
-		ID:          dbEvent.ID,
-		OriginalID:  dbEvent.ID,
-		ChatID:      dbEvent.UserTgID,
-		Text:        dbEvent.Message,
-		DateTime:    dbEvent.SendAt,
-		Weekdays:    dbEvent.Weekdays,
-		Periodicity: dbEvent.Periodicity,
-	}
-}
-func (rm *ReminderManager) deactivateEvent(ctx context.Context, eventID int) {
-	dbEvent := &db.Event{
-		ID:       eventID,
-		StatusID: db.StatusDeleted,
-	}
-	_, err := rm.eventsRepo.UpdateEvent(ctx, dbEvent, db.WithColumns("statusId"))
-	if err != nil {
-		log.Printf("Ошибка деактивации события %d: %v", eventID, err)
-	}
-}
-
 func (rm *ReminderManager) updateEventTime(ctx context.Context, eventID int, newTime time.Time) {
 	dbEvent := &db.Event{
 		ID:     eventID,
@@ -177,19 +162,18 @@ func (rm *ReminderManager) updateEventTime(ctx context.Context, eventID int, new
 	}
 	_, err := rm.eventsRepo.UpdateEvent(ctx, dbEvent, db.WithColumns("sendAt"))
 	if err != nil {
-		log.Printf("Ошибка обновления времени события %d: %v", eventID, err)
+		rm.Errorf("Ошибка обновления времени события %d: %v", eventID, err)
 	}
 }
 
-func contains(slice []int, item int) bool {
-	for _, v := range slice {
-		if v == item {
-			return true
-		}
+func NewEvent(e *model.Event) model.ReminderEvent {
+	return model.ReminderEvent{
+		ID:          e.ID,
+		OriginalID:  e.OriginalID,
+		ChatID:      e.ChatID,
+		Text:        e.Text,
+		DateTime:    e.DateTime,
+		Weekdays:    e.Weekdays,
+		Periodicity: e.Periodicity,
 	}
-	return false
-}
-
-func (rm *ReminderManager) CalculateNextTime(e Event) time.Time {
-	return rm.calculateNextTime(e)
 }

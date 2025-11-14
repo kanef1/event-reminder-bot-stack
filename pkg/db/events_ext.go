@@ -12,7 +12,7 @@ func (er EventsRepo) CountUserPeriodicEvents(ctx context.Context, userTgID int64
 		StatusID: &StatusEnabled,
 	}
 
-	search.With("periodicity IS NOT NULL")
+	search.WithPeriodicityNotNull()
 
 	count, err := er.CountEvents(ctx, search)
 	if err != nil {
@@ -27,4 +27,9 @@ func (er EventsRepo) CleanupPastEvents(ctx context.Context) error {
 		`UPDATE events SET "statusId" = ? WHERE "sendAt" < NOW() AND "statusId" = ? AND periodicity IS NULL`,
 		StatusDeleted, StatusEnabled)
 	return err
+}
+
+func (es *EventSearch) WithPeriodicityNotNull() *EventSearch {
+	es.With("periodicity IS NOT NULL")
+	return es
 }

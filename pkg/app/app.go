@@ -15,7 +15,6 @@ import (
 	"github.com/labstack/echo/v4"
 	"github.com/vmkteam/appkit"
 	"github.com/vmkteam/embedlog"
-	"github.com/vmkteam/zenrpc/v2"
 )
 
 type Config struct {
@@ -43,7 +42,6 @@ type App struct {
 	dbc     *pg.DB
 	mon     *monitor.Monitor
 	echo    *echo.Echo
-	vtsrv   zenrpc.Server
 
 	b          *bot.Bot
 	bm         *botManager.BotManager
@@ -70,8 +68,8 @@ func New(appName string, sl embedlog.Logger, cfg Config, database db.DB, dbc *pg
 			a.Errorf("Ошибка инициализации бота: %v", err)
 		} else {
 			a.b = b
-			a.bm = botManager.NewBotManager(a.b, a.eventsRepo)
-			a.rm = reminder.NewReminderManager(a.bm, a.eventsRepo)
+			a.bm = botManager.NewBotManager(a.b, a.eventsRepo, sl)
+			a.rm = reminder.NewReminderManager(a.bm, a.eventsRepo, sl)
 			a.bs = botService.NewBotService(b, a.bm, a.rm)
 		}
 	} else {
@@ -88,11 +86,14 @@ func (a *App) Run(ctx context.Context) error {
 	a.registerMetadata()
 
 	if a.b != nil {
-		if err := a.cleanupPastEvents(); err != nil {
+		if err := a.eventsRepo.CleanupPastEvents(ctx); err != nil {
 			a.Errorf("Ошибка очистки событий: %v", err)
 		}
 
-		a.restoreReminders(ctx)
+		if err := a.bm.RestoreReminders(ctx, a.rm); err != nil {
+			a.Errorf("Ошибка восстановления напоминаний: %v", err)
+		}
+
 		a.bs.RegisterHandlers()
 
 		go a.b.Start(ctx)
@@ -113,7 +114,10 @@ func (a *App) Shutdown(timeout time.Duration) error {
 	}
 
 	if a.dbc != nil {
-		a.dbc.Close()
+		err := a.dbc.Close()
+		if err != nil {
+			return err
+		}
 	}
 
 	return a.echo.Shutdown(ctx)
@@ -136,43 +140,4 @@ func (a *App) registerMetadata() {
 	md.RegisterMetrics()
 
 	a.echo.GET("/debug/metadata", md.Handler)
-}
-
-func (a *App) cleanupPastEvents() error {
-	return a.eventsRepo.CleanupPastEvents(context.Background())
-}
-
-func (a *App) restoreReminders(ctx context.Context) {
-	statusId := db.StatusEnabled
-	events, err := a.eventsRepo.EventsByFilters(ctx, &db.EventSearch{StatusID: &statusId}, db.PagerNoLimit)
-	if err != nil {
-		a.Errorf("Ошибка восстановления напоминаний: %v", err)
-		return
-	}
-
-	for _, e := range events {
-		reminderEvent := reminder.Event{
-			ID:          e.ID,
-			OriginalID:  e.ID,
-			ChatID:      e.UserTgID,
-			Text:        e.Message,
-			DateTime:    e.SendAt,
-			Weekdays:    e.Weekdays,
-			Periodicity: e.Periodicity,
-		}
-
-		if e.Periodicity != nil && e.SendAt.Before(time.Now()) {
-			nextTime := a.rm.CalculateNextTime(reminderEvent)
-			if !nextTime.IsZero() {
-				a.eventsRepo.UpdateEvent(ctx, &db.Event{
-					ID:     e.ID,
-					SendAt: nextTime,
-				}, db.WithColumns("sendAt"))
-				reminderEvent.DateTime = nextTime
-			}
-		}
-
-		a.rm.ScheduleReminder(ctx, reminderEvent)
-		a.Printf("Восстановлено напоминание: ID=%d", e.ID)
-	}
 }
