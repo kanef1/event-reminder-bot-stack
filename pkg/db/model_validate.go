@@ -4,8 +4,26 @@
 //lint:file-ignore U1000 ignore unused code, it's generated
 package db
 
+import (
+	"unicode/utf8"
+)
+
 const (
 	ErrEmptyValue = "empty"
 	ErrMaxLength  = "len"
 	ErrWrongValue = "value"
 )
+
+func (e Event) Validate() (errors map[string]string, valid bool) {
+	errors = map[string]string{}
+
+	if e.Weekdays == nil {
+		errors[Columns.Event.Weekdays] = ErrEmptyValue
+	}
+
+	if e.Periodicity != nil && utf8.RuneCountInString(*e.Periodicity) > 16 {
+		errors[Columns.Event.Periodicity] = ErrMaxLength
+	}
+
+	return errors, len(errors) == 0
+}

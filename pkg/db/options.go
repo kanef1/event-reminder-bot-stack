@@ -19,6 +19,13 @@ const (
 	StatusDeleted  = 3
 )
 
+const (
+	PeriodicityHour     = "hour"
+	PeriodicityDay      = "day"
+	PeriodicityWeek     = "week"
+	PeriodicityWeekdays = "weekdays"
+)
+
 var (
 	StatusFilter        = Filter{Field: "statusId", Value: []int{StatusEnabled, StatusDisabled}, SearchType: SearchTypeArray}
 	StatusEnabledFilter = Filter{Field: "statusId", Value: []int{StatusEnabled}, SearchType: SearchTypeArray}

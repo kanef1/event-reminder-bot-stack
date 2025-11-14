@@ -10,18 +10,20 @@ import (
 
 var Columns = struct {
 	Event struct {
-		ID, UserTgID, Message, SendAt, CreatedAt, StatusID string
+		ID, UserTgID, Message, SendAt, CreatedAt, StatusID, Weekdays, Periodicity string
 	}
 }{
 	Event: struct {
-		ID, UserTgID, Message, SendAt, CreatedAt, StatusID string
+		ID, UserTgID, Message, SendAt, CreatedAt, StatusID, Weekdays, Periodicity string
 	}{
-		ID:        "eventId",
-		UserTgID:  "userTgId",
-		Message:   "message",
-		SendAt:    "sendAt",
-		CreatedAt: "createdAt",
-		StatusID:  "statusId",
+		ID:          "eventId",
+		UserTgID:    "userTgId",
+		Message:     "message",
+		SendAt:      "sendAt",
+		CreatedAt:   "createdAt",
+		StatusID:    "statusId",
+		Weekdays:    "weekdays",
+		Periodicity: "periodicity",
 	},
 }
 
@@ -41,10 +43,12 @@ var Tables = struct {
 type Event struct {
 	tableName struct{} `pg:"events,alias:t,discard_unknown_columns"`
 
-	ID        int       `pg:"eventId,pk"`
-	UserTgID  int64     `pg:"userTgId,use_zero"`
-	Message   string    `pg:"message,use_zero"`
-	SendAt    time.Time `pg:"sendAt,use_zero"`
-	CreatedAt time.Time `pg:"createdAt,use_zero"`
-	StatusID  int       `pg:"statusId,use_zero"`
+	ID          int       `pg:"eventId,pk"`
+	UserTgID    int64     `pg:"userTgId,use_zero"`
+	Message     string    `pg:"message,use_zero"`
+	SendAt      time.Time `pg:"sendAt,use_zero"`
+	CreatedAt   time.Time `pg:"createdAt,use_zero"`
+	StatusID    int       `pg:"statusId,use_zero"`
+	Weekdays    []int     `pg:"weekdays,array"`
+	Periodicity *string   `pg:"periodicity"`
 }
