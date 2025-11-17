@@ -2,6 +2,7 @@ package event_reminder_bot
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"slices"
 	"sort"
@@ -65,6 +66,7 @@ func StartHandler(ctx context.Context, b *bot.Bot, update *models.Update) {
 			"Добавить событие: /add 2025-08-08 21:05 <Текст>\n" +
 			"Список событий: /list \n" +
 			"Удалить событие: /delete id\n" +
+			"Перенести событие: /snooze <id> <YYYY-MM-DD HH:MM>\n" +
 			"Список команд: /help",
 	})
 	if err != nil {
@@ -79,6 +81,7 @@ func HelpHandler(ctx context.Context, b *bot.Bot, update *models.Update) {
 			"Добавить событие: /add 2025-08-08 21:05 <Текст>\n" +
 			"Список событий: /list\n" +
 			"Удалить событие: /delete id\n" +
+			"Перенести событие: /snooze <id> <YYYY-MM-DD HH:MM>\n" +
 			"Список команд: /help",
 	})
 	if err != nil {
@@ -160,20 +163,18 @@ func ListHandler(ctx context.Context, b *bot.Bot, update *models.Update, bm *Bot
 	events, err := bm.GetUserEvents(ctx, update.Message.Chat.ID)
 	if err != nil {
 		bm.Errorf("Ошибка загрузки событий: %v", err)
-		_, err := b.SendMessage(ctx, &bot.SendMessageParams{
+		b.SendMessage(ctx, &bot.SendMessageParams{
 			ChatID: update.Message.Chat.ID,
 			Text:   "❌ Ошибка при загрузке событий",
 		})
-		bm.onError(err)
 		return
 	}
 
 	if len(events) == 0 {
-		_, err := b.SendMessage(ctx, &bot.SendMessageParams{
+		_, err = b.SendMessage(ctx, &bot.SendMessageParams{
 			ChatID: update.Message.Chat.ID,
 			Text:   "🔍 Нет событий",
 		})
-		bm.onError(err)
 		return
 	}
 
@@ -681,7 +682,11 @@ func (bm BotManager) DeleteEventByID(ctx context.Context, id int) error {
 }
 
 func (bm BotManager) GetUserEvents(ctx context.Context, chatID int64) ([]model.Event, error) {
-	search := &db.EventSearch{UserTgID: &chatID}
+	statusId := db.StatusEnabled
+	search := &db.EventSearch{
+		UserTgID: &chatID,
+		StatusID: &statusId,
+	}
 	dbEvents, err := bm.eventsRepo.EventsByFilters(ctx, search, db.PagerNoLimit)
 	if err != nil {
 		return nil, err
@@ -742,4 +747,41 @@ func (bm BotManager) RestoreReminders(ctx context.Context, rm ReminderScheduler)
 type ReminderScheduler interface {
 	ScheduleReminder(ctx context.Context, e model.ReminderEvent) context.CancelFunc
 	CalculateNextTime(e model.ReminderEvent) *time.Time
+}
+
+var (
+	ErrNotFound     = errors.New("event not found")
+	ErrAccessDenied = errors.New("access denied")
+	ErrInactive     = errors.New("event not active")
+	ErrPastDate     = errors.New("past_date")
+)
+
+func (bm BotManager) SnoozeEvent(ctx context.Context, eventID int, userTgID int64, newTime time.Time) error {
+	event, err := bm.eventsRepo.EventByID(ctx, eventID)
+	if err != nil {
+		return err
+	}
+
+	if event == nil {
+		return ErrNotFound
+	}
+	if event.UserTgID != userTgID {
+		return ErrAccessDenied
+	}
+
+	if event.StatusID != db.StatusEnabled {
+		return ErrInactive
+	}
+
+	if newTime.Before(time.Now()) {
+		return ErrPastDate
+	}
+
+	event.SendAt = newTime
+	_, err = bm.eventsRepo.UpdateEvent(ctx, event, db.WithColumns(db.Columns.Event.SendAt))
+	if err != nil {
+		return err
+	}
+
+	return nil
 }

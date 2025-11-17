@@ -63,7 +63,7 @@ func New(appName string, sl embedlog.Logger, cfg Config, database db.DB, dbc *pg
 	a.eventsRepo = db.NewEventsRepo(a.dbc)
 
 	if cfg.Bot.Token != "" {
-		b, err := bot.New(cfg.Bot.Token, bot.WithDefaultHandler(botManager.DefaultHandler))
+		b, err := bot.New(cfg.Bot.Token)
 		if err != nil {
 			a.Errorf("Ошибка инициализации бота: %v", err)
 		} else {
