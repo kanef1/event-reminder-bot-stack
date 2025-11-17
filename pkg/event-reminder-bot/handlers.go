@@ -213,7 +213,7 @@ func ListHandler(ctx context.Context, b *bot.Bot, update *models.Update, bm *Bot
 
 	_, err = b.SendMessage(ctx, &bot.SendMessageParams{
 		ChatID: update.Message.Chat.ID,
-		Text:   msg.String(),
+		Text:   msg.String()[:4000],
 	})
 	bm.onError(err)
 }
