@@ -2,6 +2,7 @@ package event_reminder_bot
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log"
 	"sort"
@@ -299,6 +300,13 @@ func (bm BotManager) GetEventByID(ctx context.Context, id int) (*model.Event, er
 	}, nil
 }
 
+var (
+	ErrNotFound     = errors.New("event not found")
+	ErrAccessDenied = errors.New("access denied")
+	ErrInactive     = errors.New("event not active")
+	ErrPastDate     = errors.New("past_date")
+)
+
 func (bm BotManager) SnoozeEvent(ctx context.Context, eventID int, userTgID int64, newTime time.Time) error {
 	event, err := bm.eventsRepo.EventByID(ctx, eventID)
 	if err != nil {
@@ -306,19 +314,18 @@ func (bm BotManager) SnoozeEvent(ctx context.Context, eventID int, userTgID int6
 	}
 
 	if event == nil {
-		return fmt.Errorf("event not found")
+		return ErrNotFound
 	}
-
 	if event.UserTgID != userTgID {
-		return fmt.Errorf("access denied")
+		return ErrAccessDenied
 	}
 
 	if event.StatusID != db.StatusEnabled {
-		return fmt.Errorf("event not active")
+		return ErrInactive
 	}
 
 	if newTime.Before(time.Now()) {
-		return fmt.Errorf("past_date")
+		return ErrPastDate
 	}
 
 	event.SendAt = newTime
