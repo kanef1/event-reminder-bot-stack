@@ -195,14 +195,12 @@ func (bs *BotService) snoozeHandler(ctx context.Context, b *bot.Bot, update *mod
 
 	err = bs.bm.SnoozeEvent(ctx, eventID, update.Message.Chat.ID, newTime)
 	if err != nil {
-		if err != nil {
-			responseText := processError(err)
-			b.SendMessage(ctx, &bot.SendMessageParams{
-				ChatID: update.Message.Chat.ID,
-				Text:   responseText,
-			})
-		}
+		responseText := processError(err)
+		_, err = b.SendMessage(ctx, &bot.SendMessageParams{
+			ChatID: update.Message.Chat.ID,
+			Text:   responseText})
 		return
+
 	}
 
 	bs.rm.CancelReminder(eventID)
@@ -287,10 +285,13 @@ func (bs *BotService) textHandler(ctx context.Context, b *bot.Bot, update *model
 	err = bs.bm.SnoozeEvent(ctx, eventID, chatID, newTime)
 	if err != nil {
 		responseText := processError(err)
-		b.SendMessage(ctx, &bot.SendMessageParams{
+		_, err = b.SendMessage(ctx, &bot.SendMessageParams{
 			ChatID: chatID,
 			Text:   responseText,
 		})
+		if err != nil {
+			return
+		}
 	}
 
 	bs.rm.CancelReminder(eventID)
