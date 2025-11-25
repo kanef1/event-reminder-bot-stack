@@ -46,28 +46,30 @@ func NewBotService(b *bot.Bot, bm *botManager.BotManager, rm *reminder.ReminderM
 }
 
 func (bs *BotService) RegisterHandlers() {
-	bs.b.RegisterHandler(bot.HandlerTypeMessageText, "/start", bot.MatchTypeExact, botManager.StartHandler)
-	bs.b.RegisterHandler(bot.HandlerTypeMessageText, "/help", bot.MatchTypeExact, botManager.HelpHandler)
-	bs.b.RegisterHandler(bot.HandlerTypeMessageText, "/add", bot.MatchTypePrefix, bs.AddHandler)
-	bs.b.RegisterHandler(bot.HandlerTypeMessageText, "/list", bot.MatchTypeExact, bs.listHandler)
-	bs.b.RegisterHandler(bot.HandlerTypeMessageText, "/delete", bot.MatchTypePrefix, bs.deleteHandler)
-}
-
-func (bs *BotService) deleteHandler(ctx context.Context, b *bot.Bot, update *models.Update) {
-	botManager.DeleteHandler(ctx, b, update, bs.bm)
-}
-
-func (bs *BotService) listHandler(ctx context.Context, b *bot.Bot, update *models.Update) {
-	botManager.ListHandler(ctx, b, update, bs.bm)
+	bs.b.RegisterHandler(bot.HandlerTypeMessageText, startCommand, bot.MatchTypeExact, botManager.StartHandler)
+	bs.b.RegisterHandler(bot.HandlerTypeMessageText, helpCommand, bot.MatchTypeExact, botManager.HelpHandler)
+	bs.b.RegisterHandler(bot.HandlerTypeMessageText, addCommand, bot.MatchTypePrefix, bs.AddHandler)
+	bs.b.RegisterHandler(bot.HandlerTypeMessageText, listCommand, bot.MatchTypeExact, bs.bm.ListHandler)
+	bs.b.RegisterHandler(bot.HandlerTypeMessageText, deleteCommand, bot.MatchTypePrefix, bs.bm.DeleteHandler)
+	bs.b.RegisterHandler(bot.HandlerTypeMessageText, snoozeCommand, bot.MatchTypePrefix, bs.snoozeHandler)
+	bs.b.RegisterHandler(bot.HandlerTypeCallbackQueryData, "done_", bot.MatchTypePrefix, bs.handleDoneCallback)
+	bs.b.RegisterHandler(bot.HandlerTypeCallbackQueryData, "snooze_", bot.MatchTypePrefix, bs.handleSnoozeCallback)
+	bs.b.RegisterHandler(bot.HandlerTypeCallbackQueryData, "period:", bot.MatchTypePrefix, bs.bm.HandlePeriodicityCallback)
+	bs.b.RegisterHandler(bot.HandlerTypeCallbackQueryData, "weekday:", bot.MatchTypePrefix, bs.bm.HandleWeekdayCallback)
+	bs.b.RegisterHandler(bot.HandlerTypeCallbackQueryData, "weekdays_done:", bot.MatchTypePrefix, bs.bm.HandleWeekdaysDoneCallback)
+	bs.b.RegisterHandler(bot.HandlerTypeCallbackQueryData, "page_", bot.MatchTypePrefix, bs.handlePageCallback)
+	bs.b.RegisterHandlerMatchFunc(func(update *models.Update) bool {
+		return update.Message != nil && update.Message.Text != ""
+	}, bs.textHandler)
 }
 
 func (bs BotService) AddHandler(ctx context.Context, b *bot.Bot, update *models.Update) {
 	args := strings.TrimSpace(strings.TrimPrefix(update.Message.Text, "/add"))
 	parts := strings.SplitN(args, " ", 3)
 	if len(parts) < 3 {
-		b.SendMessage(ctx, &bot.SendMessageParams{
+		_, err := b.SendMessage(ctx, &bot.SendMessageParams{
 			ChatID: update.Message.Chat.ID,
-			Text:   "❗ Формат: /add 2025-08-06 15:00 Текст",
+			Text:   "❗ Формат: /add YYYY-MM-DD HH:MM Текст",
 		})
 		if err != nil {
 			return
@@ -83,6 +85,8 @@ func (bs BotService) AddHandler(ctx context.Context, b *bot.Bot, update *models.
 			text = "❗ Недопустимый формат даты (используйте YYYY-MM-DD HH:MM)"
 		case "past_date":
 			text = "❗ Недопустимый формат даты (событие должно быть в будущем)"
+		case "text_too_long":
+			text = "❗ Текст события должен быть не длиннее 200 символов"
 		default:
 			text = fmt.Sprintf("Ошибка: %v", err)
 		}
@@ -91,23 +95,15 @@ func (bs BotService) AddHandler(ctx context.Context, b *bot.Bot, update *models.
 			ChatID: update.Message.Chat.ID,
 			Text:   text,
 		})
+		if err != nil {
+			return
+		}
 		return
 	}
 
-	reminderEvent := model.NewReminderEventFromModel(event)
+	reminderEvent := model.ToDB(event)
 
 	bs.rm.ScheduleReminder(ctx, reminderEvent)
-
-	_, err = b.SendMessage(ctx, &bot.SendMessageParams{
-		ChatID: update.Message.Chat.ID,
-		Text:   "✅ Событие добавлено!",
-	})
-	if err != nil {
-		return
-	}
-	if err != nil {
-		return
-	}
 }
 
 func (bs *BotService) snoozeHandler(ctx context.Context, b *bot.Bot, update *models.Update) {
@@ -196,12 +192,14 @@ func (bs *BotService) snoozeHandler(ctx context.Context, b *bot.Bot, update *mod
 
 	event, err := bs.bm.GetEventByID(ctx, eventID)
 	if err == nil && event != nil {
-		reminderEvent := reminder.Event{
-			ID:         event.ID,
-			OriginalID: event.OriginalID,
-			ChatID:     event.ChatID,
-			Text:       event.Text,
-			DateTime:   event.DateTime,
+		reminderEvent := model.ReminderEvent{
+			ID:          event.ID,
+			OriginalID:  event.OriginalID,
+			ChatID:      event.ChatID,
+			Text:        event.Text,
+			DateTime:    event.DateTime,
+			Weekdays:    event.Weekdays,
+			Periodicity: event.Periodicity,
 		}
 		bs.rm.ScheduleReminder(ctx, reminderEvent)
 	}
@@ -287,12 +285,14 @@ func (bs *BotService) textHandler(ctx context.Context, b *bot.Bot, update *model
 
 	event, err := bs.bm.GetEventByID(ctx, eventID)
 	if err == nil && event != nil {
-		reminderEvent := reminder.Event{
-			ID:         event.ID,
-			OriginalID: event.OriginalID,
-			ChatID:     event.ChatID,
-			Text:       event.Text,
-			DateTime:   event.DateTime,
+		reminderEvent := model.ReminderEvent{
+			ID:          event.ID,
+			OriginalID:  event.OriginalID,
+			ChatID:      event.ChatID,
+			Text:        event.Text,
+			DateTime:    event.DateTime,
+			Weekdays:    event.Weekdays,
+			Periodicity: event.Periodicity,
 		}
 		bs.rm.ScheduleReminder(ctx, reminderEvent)
 	}
@@ -426,12 +426,14 @@ func (bs *BotService) handleSnoozeCallback(ctx context.Context, b *bot.Bot, upda
 
 		event, err := bs.bm.GetEventByID(ctx, eventID)
 		if err == nil && event != nil {
-			reminderEvent := reminder.Event{
-				ID:         event.ID,
-				OriginalID: event.OriginalID,
-				ChatID:     event.ChatID,
-				Text:       event.Text,
-				DateTime:   event.DateTime,
+			reminderEvent := model.ReminderEvent{
+				ID:          event.ID,
+				OriginalID:  event.OriginalID,
+				ChatID:      event.ChatID,
+				Text:        event.Text,
+				DateTime:    event.DateTime,
+				Weekdays:    event.Weekdays,
+				Periodicity: event.Periodicity,
 			}
 			bs.rm.ScheduleReminder(ctx, reminderEvent)
 		}
@@ -512,4 +514,62 @@ func (bs *BotService) handleSnoozeCallback(ctx context.Context, b *bot.Bot, upda
 			return
 		}
 	}
+}
+
+func (bs *BotService) handlePageCallback(ctx context.Context, b *bot.Bot, update *models.Update) {
+	data := update.CallbackQuery.Data
+	chatID := update.CallbackQuery.Message.Message.Chat.ID
+
+	parts := strings.Split(data, "_")
+	if len(parts) != 2 {
+		return
+	}
+
+	page, err := strconv.Atoi(parts[1])
+	if err != nil || page < 1 {
+		return
+	}
+
+	events, total, err := bs.bm.GetUserEventsPaged(ctx, chatID, page, 10)
+	if err != nil {
+		return
+	}
+
+	if len(events) == 0 {
+		return
+	}
+
+	var msg strings.Builder
+	msg.WriteString("📅 Список событий:\n\n")
+
+	for i, e := range events {
+		msg.WriteString(fmt.Sprintf("%d. %s — %s\n",
+			(i+1)+(page-1)*10,
+			e.Text,
+			e.DateTime.Format("2006-01-02 15:04"),
+		))
+	}
+
+	var buttons [][]models.InlineKeyboardButton
+
+	if page > 1 {
+		buttons = append(buttons, []models.InlineKeyboardButton{
+			{Text: "⬅️ Назад", CallbackData: fmt.Sprintf("page_%d", page-1)},
+		})
+	}
+
+	if page*10 < total {
+		buttons = append(buttons, []models.InlineKeyboardButton{
+			{Text: "➡️ Далее", CallbackData: fmt.Sprintf("page_%d", page+1)},
+		})
+	}
+
+	_, err = b.EditMessageText(ctx, &bot.EditMessageTextParams{
+		ChatID:    chatID,
+		MessageID: update.CallbackQuery.Message.Message.ID,
+		Text:      msg.String(),
+		ReplyMarkup: &models.InlineKeyboardMarkup{
+			InlineKeyboard: buttons,
+		},
+	})
 }

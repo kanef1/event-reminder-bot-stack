@@ -14,6 +14,7 @@ import (
 	monitor "github.com/hypnoglow/go-pg-monitor"
 	"github.com/labstack/echo/v4"
 	"github.com/vmkteam/appkit"
+	"github.com/vmkteam/cron"
 	"github.com/vmkteam/embedlog"
 )
 
@@ -84,6 +85,21 @@ func (a *App) Run(ctx context.Context) error {
 	a.registerHandlers()
 	a.registerDebugHandlers()
 	a.registerMetadata()
+
+	m := cron.NewManager()
+
+	m.AddFunc("daily-events", "0 8 * * *", func(ctx context.Context) error {
+		if a.bm != nil {
+			a.bm.SendDailyEvents(ctx)
+		}
+		return nil
+	})
+
+	go func() {
+		if err := m.Run(ctx); err != nil {
+			a.Errorf("cron error: %v", err)
+		}
+	}()
 
 	if a.b != nil {
 		if err := a.eventsRepo.CleanupPastEvents(ctx); err != nil {

@@ -14,6 +14,7 @@ require (
 	github.com/namsral/flag v1.7.4-pre
 	github.com/prometheus/client_golang v1.23.2
 	github.com/vmkteam/appkit v0.0.1
+	github.com/vmkteam/cron v0.1.4
 	github.com/vmkteam/embedlog v0.1.3
 	github.com/vmkteam/zenrpc-middleware v1.3.0
 	github.com/vmkteam/zenrpc/v2 v2.2.12
@@ -35,8 +36,8 @@ require (
 	github.com/prometheus/client_model v0.6.2 // indirect
 	github.com/prometheus/common v0.66.1 // indirect
 	github.com/prometheus/procfs v0.17.0 // indirect
+	github.com/robfig/cron/v3 v3.0.1 // indirect
 	github.com/smarty/assertions v1.16.0 // indirect
-	github.com/smartystreets/goconvey v1.8.1 // indirect
 	github.com/tmthrgd/go-hex v0.0.0-20190904060850-447a3041c3bc // indirect
 	github.com/valyala/bytebufferpool v1.0.0 // indirect
 	github.com/valyala/fasttemplate v1.2.2 // indirect

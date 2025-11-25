@@ -89,7 +89,7 @@ func HelpHandler(ctx context.Context, b *bot.Bot, update *models.Update) {
 	}
 }
 
-func DeleteHandler(ctx context.Context, b *bot.Bot, update *models.Update, bm *BotManager) {
+func (bm BotManager) DeleteHandler(ctx context.Context, b *bot.Bot, update *models.Update) {
 	args := strings.TrimSpace(strings.TrimPrefix(update.Message.Text, "/delete"))
 	if args == "" {
 		_, err := b.SendMessage(ctx, &bot.SendMessageParams{
@@ -159,11 +159,41 @@ func DeleteHandler(ctx context.Context, b *bot.Bot, update *models.Update, bm *B
 	bm.onError(err)
 }
 
-func ListHandler(ctx context.Context, b *bot.Bot, update *models.Update, bm *BotManager) {
+func (bm BotManager) GetUserEventsPaged(ctx context.Context, chatID int64, page int, pageSize int) ([]model.Event, int, error) {
+	events, err := bm.GetUserEvents(ctx, chatID)
+	if err != nil {
+		return nil, 0, err
+	}
+
+	total := len(events)
+	start := (page - 1) * pageSize
+	if start >= total {
+		return []model.Event{}, total, nil
+	}
+
+	end := start + pageSize
+	if end > total {
+		end = total
+	}
+
+	return events[start:end], total, nil
+}
+
+func (bm BotManager) ListHandler(ctx context.Context, b *bot.Bot, update *models.Update) {
+	page := 1
+	pageSize := 10
+
+	parts := strings.Fields(update.Message.Text)
+	if len(parts) > 1 {
+		if p, err := strconv.Atoi(parts[1]); err == nil && p > 0 {
+			page = p
+		}
+	}
+
 	events, err := bm.GetUserEvents(ctx, update.Message.Chat.ID)
 	if err != nil {
 		bm.Errorf("Ошибка загрузки событий: %v", err)
-		b.SendMessage(ctx, &bot.SendMessageParams{
+		_, err = b.SendMessage(ctx, &bot.SendMessageParams{
 			ChatID: update.Message.Chat.ID,
 			Text:   "❌ Ошибка при загрузке событий",
 		})
@@ -178,6 +208,20 @@ func ListHandler(ctx context.Context, b *bot.Bot, update *models.Update, bm *Bot
 		return
 	}
 
+	total := len(events)
+	start := (page - 1) * pageSize
+	if start >= total {
+		start = 0
+		page = 1
+	}
+
+	end := start + pageSize
+	if end > total {
+		end = total
+	}
+
+	pageEvents := events[start:end]
+
 	periodicCount, err := bm.eventsRepo.CountUserPeriodicEvents(ctx, update.Message.Chat.ID)
 	if err != nil {
 		bm.Errorf("Ошибка подсчета периодических событий: %v", err)
@@ -188,8 +232,8 @@ func ListHandler(ctx context.Context, b *bot.Bot, update *models.Update, bm *Bot
 	msg.WriteString("📅 Список событий:\n\n")
 	msg.WriteString(fmt.Sprintf("📊 Периодических уведомлений: %d/%d\n\n", periodicCount, MaxPeriodic))
 
-	for i, e := range events {
-		msg.WriteString(fmt.Sprintf("%d. %s — ", i+1, e.Text))
+	for i, e := range pageEvents {
+		msg.WriteString(fmt.Sprintf("%d. %s — ", start+i+1, e.Text))
 		msg.WriteString(fmt.Sprintf("%s\n", e.DateTime.Format("2006-01-02 15:04")))
 
 		if e.Periodicity != nil {
@@ -212,13 +256,33 @@ func ListHandler(ctx context.Context, b *bot.Bot, update *models.Update, bm *Bot
 		}
 	}
 
+	var buttons [][]models.InlineKeyboardButton
+
+	if page > 1 {
+		buttons = append(buttons, []models.InlineKeyboardButton{
+			{Text: "⬅️ Назад", CallbackData: fmt.Sprintf("page_%d", page-1)},
+		})
+	}
+
+	if end < total {
+		buttons = append(buttons, []models.InlineKeyboardButton{
+			{Text: "➡️ Далее", CallbackData: fmt.Sprintf("page_%d", page+1)},
+		})
+	}
+
+	if buttons == nil {
+		buttons = [][]models.InlineKeyboardButton{}
+	}
+
 	_, err = b.SendMessage(ctx, &bot.SendMessageParams{
 		ChatID: update.Message.Chat.ID,
 		Text:   msg.String(),
+		ReplyMarkup: &models.InlineKeyboardMarkup{
+			InlineKeyboard: buttons,
+		},
 	})
 	bm.onError(err)
 }
-
 func dayName(day int) string {
 	switch day {
 	case 1:
@@ -237,6 +301,67 @@ func dayName(day int) string {
 		return "Вс"
 	default:
 		return strconv.Itoa(day)
+	}
+}
+
+func (bm BotManager) SendDailyEvents(ctx context.Context) {
+	users, err := bm.eventsRepo.AllUsersWithEventsToday(ctx)
+	if err != nil {
+		bm.Errorf("Ошибка получения пользователей: %v", err)
+		return
+	}
+
+	for _, userID := range users {
+		events, err := bm.GetUserEvents(ctx, userID)
+		if err != nil {
+			bm.Errorf("Ошибка загрузки событий пользователя %d: %v", userID, err)
+			continue
+		}
+
+		var todayEvents []model.Event
+		today := time.Now().In(time.FixedZone("MSK", 3*3600)).Format("2006-01-02")
+
+		for _, e := range events {
+			if e.DateTime.Format("2006-01-02") == today {
+				todayEvents = append(todayEvents, e)
+			}
+		}
+
+		if len(todayEvents) == 0 {
+			continue
+		}
+
+		var msg strings.Builder
+		msg.WriteString("📅 События на сегодня:\n\n")
+
+		for i, e := range todayEvents {
+			msg.WriteString(fmt.Sprintf("%d. %s — %s\n", i+1, e.Text, e.DateTime.Format("15:04")))
+
+			if e.Periodicity != nil {
+				switch *e.Periodicity {
+				case "hour":
+					msg.WriteString("🔄 Каждый час\n")
+				case "day":
+					msg.WriteString("🔄 Ежедневно\n")
+				case "week":
+					msg.WriteString("🔄 Еженедельно\n")
+				case "weekdays":
+					var days []string
+					for _, d := range e.Weekdays {
+						days = append(days, dayName(d))
+					}
+					msg.WriteString(fmt.Sprintf("🔄 По дням: %s\n", strings.Join(days, ", ")))
+				}
+			} else {
+				msg.WriteString("⏹️ Без повтора\n")
+			}
+		}
+
+		_, err = bm.b.SendMessage(ctx, &bot.SendMessageParams{
+			ChatID: userID,
+			Text:   msg.String(),
+		})
+		bm.onError(err)
 	}
 }
 
@@ -261,7 +386,33 @@ func (bm *BotManager) onError(err error) {
 	bm.Errorf("%v", err)
 }
 
-func (bm BotManager) SendReminder(ctx context.Context, chatID int64, text string) {
+func (bm BotManager) SendReminder(ctx context.Context, chatID int64, text string, eventID int) {
+	keyboard := &models.InlineKeyboardMarkup{
+		InlineKeyboard: [][]models.InlineKeyboardButton{
+			{
+				{Text: "⏱️ 5 мин", CallbackData: fmt.Sprintf("snooze_%d_5", eventID)},
+				{Text: "⏱️ 10 мин", CallbackData: fmt.Sprintf("snooze_%d_10", eventID)},
+			},
+			{
+				{Text: "📅 Выбрать время", CallbackData: fmt.Sprintf("snooze_custom_%d", eventID)},
+			},
+			{
+				{Text: "✅ Выполнено", CallbackData: fmt.Sprintf("done_%d", eventID)},
+			},
+		},
+	}
+
+	_, err := bm.b.SendMessage(ctx, &bot.SendMessageParams{
+		ChatID:      chatID,
+		Text:        "🔔 Напоминание: " + text,
+		ReplyMarkup: keyboard,
+	})
+	if err != nil {
+		return
+	}
+}
+
+func (bm BotManager) SendReminderPeriodicity(ctx context.Context, chatID int64, text string) {
 	_, err := bm.b.SendMessage(ctx, &bot.SendMessageParams{
 		ChatID: chatID,
 		Text:   "🔔 Напоминание: " + text,
@@ -273,6 +424,10 @@ func (bm BotManager) AddEvent(ctx context.Context, chatId int64, parts []string)
 	datePart := parts[0]
 	timePart := parts[1]
 	text := parts[2]
+
+	if len(text) > 200 {
+		return nil, fmt.Errorf("text_too_long")
+	}
 
 	loc, err := time.LoadLocation("Europe/Moscow")
 	if err != nil {

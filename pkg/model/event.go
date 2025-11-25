@@ -41,7 +41,6 @@ func NewEvent(dbEvent *db.Event) *Event {
 	}
 }
 
-// ПРОБЛЕМА 10: функция для конвертации списка событий
 func NewEvents(dbEvents []db.Event) []Event {
 	events := make([]Event, len(dbEvents))
 	for i, dbEvent := range dbEvents {
@@ -70,7 +69,7 @@ func NewReminderEvent(dbEvent *db.Event) ReminderEvent {
 	}
 }
 
-func NewReminderEventFromModel(event *Event) ReminderEvent {
+func ToDB(event *Event) ReminderEvent {
 	return ReminderEvent{
 		ID:          event.ID,
 		OriginalID:  event.OriginalID,

@@ -33,3 +33,21 @@ func (es *EventSearch) WithPeriodicityNotNull() *EventSearch {
 	es.With("periodicity IS NOT NULL")
 	return es
 }
+
+func (r *EventsRepo) AllUsersWithEventsToday(ctx context.Context) ([]int64, error) {
+	var users []int64
+
+	query := `
+        SELECT DISTINCT "userTgId"
+        FROM "events"
+        WHERE "statusId" = 1
+          AND DATE("sendAt" AT TIME ZONE 'Europe/Moscow') = DATE(NOW() AT TIME ZONE 'Europe/Moscow')
+    `
+
+	_, err := r.db.QueryContext(ctx, &users, query)
+	if err != nil {
+		return nil, err
+	}
+
+	return users, nil
+}
