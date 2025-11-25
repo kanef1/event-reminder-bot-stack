@@ -63,7 +63,7 @@ func New(appName string, sl embedlog.Logger, cfg Config, database db.DB, dbc *pg
 
 	a.eventsRepo = db.NewEventsRepo(a.dbc)
 
-	if cfg.Bot.Token != "" {
+	if cfg.Bot.Token == "" {
 		a.Errorf("Токен бота не указан, бот не будет запущен")
 		return a
 	}
