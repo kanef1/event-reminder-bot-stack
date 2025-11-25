@@ -197,6 +197,7 @@ func (bm BotManager) ListHandler(ctx context.Context, b *bot.Bot, update *models
 			ChatID: update.Message.Chat.ID,
 			Text:   "❌ Ошибка при загрузке событий",
 		})
+		bm.onError(err)
 		return
 	}
 
