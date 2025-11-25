@@ -2,6 +2,7 @@ package app
 
 import (
 	"context"
+	"errors"
 	"time"
 
 	"event-reminder-bot/pkg/botService"
@@ -14,7 +15,6 @@ import (
 	monitor "github.com/hypnoglow/go-pg-monitor"
 	"github.com/labstack/echo/v4"
 	"github.com/vmkteam/appkit"
-	"github.com/vmkteam/cron"
 	"github.com/vmkteam/embedlog"
 )
 
@@ -64,18 +64,20 @@ func New(appName string, sl embedlog.Logger, cfg Config, database db.DB, dbc *pg
 	a.eventsRepo = db.NewEventsRepo(a.dbc)
 
 	if cfg.Bot.Token != "" {
-		b, err := bot.New(cfg.Bot.Token)
-		if err != nil {
-			a.Errorf("Ошибка инициализации бота: %v", err)
-		} else {
-			a.b = b
-			a.bm = botManager.NewBotManager(a.b, a.eventsRepo, sl)
-			a.rm = reminder.NewReminderManager(a.bm, a.eventsRepo, sl)
-			a.bs = botService.NewBotService(b, a.bm, a.rm)
-		}
-	} else {
-		a.Printf("Токен бота не указан, бот не будет запущен")
+		a.Errorf("Токен бота не указан, бот не будет запущен")
+		return a
 	}
+
+	b, err := bot.New(cfg.Bot.Token)
+	if err != nil {
+		a.Errorf("Ошибка инициализации бота: %v", err)
+		return a
+	}
+
+	a.b = b
+	a.bm = botManager.NewBotManager(a.b, a.eventsRepo, sl)
+	a.rm = reminder.NewReminderManager(a.bm, a.eventsRepo, sl)
+	a.bs = botService.NewBotService(b, a.bm, a.rm)
 
 	return a
 }
@@ -85,38 +87,24 @@ func (a *App) Run(ctx context.Context) error {
 	a.registerHandlers()
 	a.registerDebugHandlers()
 	a.registerMetadata()
+	a.registerCron(ctx)
 
-	m := cron.NewManager()
-
-	m.AddFunc("daily-events", "0 8 * * *", func(ctx context.Context) error {
-		if a.bm != nil {
-			a.bm.SendDailyEvents(ctx)
-		}
-		return nil
-	})
-
-	go func() {
-		if err := m.Run(ctx); err != nil {
-			a.Errorf("cron error: %v", err)
-		}
-	}()
-
-	if a.b != nil {
-		if err := a.eventsRepo.CleanupPastEvents(ctx); err != nil {
-			a.Errorf("Ошибка очистки событий: %v", err)
-		}
-
-		if err := a.bm.RestoreReminders(ctx, a.rm); err != nil {
-			a.Errorf("Ошибка восстановления напоминаний: %v", err)
-		}
-
-		a.bs.RegisterHandlers()
-
-		go a.b.Start(ctx)
-		a.Printf("Бот запущен")
-	} else {
-		a.Printf("Бот не запущен (токен не указан)")
+	if a.b == nil {
+		return errors.New("бот не запущен (токен не указан)")
 	}
+
+	if err := a.eventsRepo.CleanupPastEvents(ctx); err != nil {
+		a.Errorf("Ошибка очистки событий: %v", err)
+	}
+
+	if err := a.bm.RestoreReminders(ctx, a.rm); err != nil {
+		a.Errorf("Ошибка восстановления напоминаний: %v", err)
+	}
+
+	a.bs.RegisterHandlers()
+
+	go a.b.Start(ctx)
+	a.Printf("Бот запущен")
 
 	return a.runHTTPServer(ctx, a.cfg.Server.Host, a.cfg.Server.Port)
 }
