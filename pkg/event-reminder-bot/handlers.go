@@ -63,7 +63,7 @@ func StartHandler(ctx context.Context, b *bot.Bot, update *models.Update) {
 		ChatID: update.Message.Chat.ID,
 		Text: "Добрый день, данный бот предназначен для простого планирования.\n" +
 			"Список умений:\n" +
-			"Добавить событие: /add 2025-08-08 21:05 <Текст>\n" +
+			"Добавить событие: /add <YYYY-MM-DD HH:MM>\n <Текст>\n" +
 			"Список событий: /list \n" +
 			"Удалить событие: /delete id\n" +
 			"Перенести событие: /snooze <id> <YYYY-MM-DD HH:MM>\n" +
@@ -78,7 +78,7 @@ func HelpHandler(ctx context.Context, b *bot.Bot, update *models.Update) {
 	_, err := b.SendMessage(ctx, &bot.SendMessageParams{
 		ChatID: update.Message.Chat.ID,
 		Text: "Список умений:\n" +
-			"Добавить событие: /add 2025-08-08 21:05 <Текст>\n" +
+			"Добавить событие: /add <YYYY-MM-DD HH:MM>\n <Текст>\n" +
 			"Список событий: /list\n" +
 			"Удалить событие: /delete id\n" +
 			"Перенести событие: /snooze <id> <YYYY-MM-DD HH:MM>\n" +
