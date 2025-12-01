@@ -3,6 +3,7 @@ package db
 import (
 	"context"
 	"fmt"
+	"time"
 )
 
 func (er EventsRepo) CountUserPeriodicEvents(ctx context.Context, userTgID int64) (int, error) {
@@ -50,4 +51,16 @@ func (r *EventsRepo) AllUsersWithEventsToday(ctx context.Context) ([]int64, erro
 	}
 
 	return users, nil
+}
+
+func (er EventsRepo) EventsToSend(ctx context.Context) ([]Event, error) {
+	now := time.Now()
+	statusId := StatusEnabled
+
+	search := &EventSearch{
+		StatusID:     &statusId,
+		SendAtBefore: &now,
+	}
+
+	return er.EventsByFilters(ctx, search, PagerNoLimit)
 }

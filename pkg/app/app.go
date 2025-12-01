@@ -63,7 +63,7 @@ func New(appName string, sl embedlog.Logger, cfg Config, database db.DB, dbc *pg
 
 	a.eventsRepo = db.NewEventsRepo(a.dbc)
 
-	if cfg.Bot.Token != "" {
+	if cfg.Bot.Token == "" {
 		a.Errorf("Токен бота не указан, бот не будет запущен")
 		return a
 	}
@@ -91,14 +91,6 @@ func (a *App) Run(ctx context.Context) error {
 
 	if a.b == nil {
 		return errors.New("бот не запущен (токен не указан)")
-	}
-
-	if err := a.eventsRepo.CleanupPastEvents(ctx); err != nil {
-		a.Errorf("Ошибка очистки событий: %v", err)
-	}
-
-	if err := a.bm.RestoreReminders(ctx, a.rm); err != nil {
-		a.Errorf("Ошибка восстановления напоминаний: %v", err)
 	}
 
 	a.bs.RegisterHandlers()

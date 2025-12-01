@@ -11,7 +11,6 @@ import (
 	"time"
 
 	botManager "event-reminder-bot/pkg/event-reminder-bot"
-	"event-reminder-bot/pkg/model"
 	"event-reminder-bot/pkg/reminder"
 
 	"github.com/go-telegram/bot"
@@ -63,7 +62,7 @@ func (bs *BotService) RegisterHandlers() {
 	}, bs.textHandler)
 }
 
-func (bs BotService) AddHandler(ctx context.Context, b *bot.Bot, update *models.Update) {
+func (bs *BotService) AddHandler(ctx context.Context, b *bot.Bot, update *models.Update) {
 	args := strings.TrimSpace(strings.TrimPrefix(update.Message.Text, "/add"))
 	parts := strings.SplitN(args, " ", 3)
 	if len(parts) < 3 {
@@ -77,7 +76,7 @@ func (bs BotService) AddHandler(ctx context.Context, b *bot.Bot, update *models.
 		return
 	}
 
-	event, err := bs.bm.AddEvent(ctx, update.Message.Chat.ID, parts)
+	_, err := bs.bm.AddEvent(ctx, update.Message.Chat.ID, parts)
 	if err != nil {
 		var text string
 		switch err.Error() {
@@ -100,10 +99,6 @@ func (bs BotService) AddHandler(ctx context.Context, b *bot.Bot, update *models.
 		}
 		return
 	}
-
-	reminderEvent := model.ToDB(event)
-
-	bs.rm.ScheduleReminder(ctx, reminderEvent)
 }
 
 func (bs *BotService) snoozeHandler(ctx context.Context, b *bot.Bot, update *models.Update) {
@@ -185,23 +180,6 @@ func (bs *BotService) snoozeHandler(ctx context.Context, b *bot.Bot, update *mod
 			ChatID: update.Message.Chat.ID,
 			Text:   responseText})
 		return
-
-	}
-
-	bs.rm.CancelReminder(eventID)
-
-	event, err := bs.bm.GetEventByID(ctx, eventID)
-	if err == nil && event != nil {
-		reminderEvent := model.ReminderEvent{
-			ID:          event.ID,
-			OriginalID:  event.OriginalID,
-			ChatID:      event.ChatID,
-			Text:        event.Text,
-			DateTime:    event.DateTime,
-			Weekdays:    event.Weekdays,
-			Periodicity: event.Periodicity,
-		}
-		bs.rm.ScheduleReminder(ctx, reminderEvent)
 	}
 
 	_, err = b.SendMessage(ctx, &bot.SendMessageParams{
@@ -279,22 +257,7 @@ func (bs *BotService) textHandler(ctx context.Context, b *bot.Bot, update *model
 		if err != nil {
 			return
 		}
-	}
-
-	bs.rm.CancelReminder(eventID)
-
-	event, err := bs.bm.GetEventByID(ctx, eventID)
-	if err == nil && event != nil {
-		reminderEvent := model.ReminderEvent{
-			ID:          event.ID,
-			OriginalID:  event.OriginalID,
-			ChatID:      event.ChatID,
-			Text:        event.Text,
-			DateTime:    event.DateTime,
-			Weekdays:    event.Weekdays,
-			Periodicity: event.Periodicity,
-		}
-		bs.rm.ScheduleReminder(ctx, reminderEvent)
+		return
 	}
 
 	_, err = b.SendMessage(ctx, &bot.SendMessageParams{
@@ -340,8 +303,6 @@ func (bs *BotService) handleDoneCallback(ctx context.Context, b *bot.Bot, update
 			}
 			return
 		}
-
-		bs.rm.CancelReminder(eventID)
 
 		_, err = b.AnswerCallbackQuery(ctx, &bot.AnswerCallbackQueryParams{
 			CallbackQueryID: update.CallbackQuery.ID,
@@ -420,22 +381,6 @@ func (bs *BotService) handleSnoozeCallback(ctx context.Context, b *bot.Bot, upda
 				return
 			}
 			return
-		}
-
-		bs.rm.CancelReminder(eventID)
-
-		event, err := bs.bm.GetEventByID(ctx, eventID)
-		if err == nil && event != nil {
-			reminderEvent := model.ReminderEvent{
-				ID:          event.ID,
-				OriginalID:  event.OriginalID,
-				ChatID:      event.ChatID,
-				Text:        event.Text,
-				DateTime:    event.DateTime,
-				Weekdays:    event.Weekdays,
-				Periodicity: event.Periodicity,
-			}
-			bs.rm.ScheduleReminder(ctx, reminderEvent)
 		}
 
 		_, err = b.AnswerCallbackQuery(ctx, &bot.AnswerCallbackQueryParams{

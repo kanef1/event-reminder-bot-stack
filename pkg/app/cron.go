@@ -9,6 +9,13 @@ import (
 func (a *App) registerCron(ctx context.Context) {
 	m := cron.NewManager()
 
+	m.AddFunc("process-reminders", "* * * * *", func(ctx context.Context) error {
+		if a.rm != nil {
+			return a.rm.ProcessReminders(ctx)
+		}
+		return nil
+	})
+
 	m.AddFunc("daily-events", "0 8 * * *", func(ctx context.Context) error {
 		if a.bm != nil {
 			a.bm.SendDailyEvents(ctx)

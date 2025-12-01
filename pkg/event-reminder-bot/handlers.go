@@ -868,43 +868,6 @@ func (bm BotManager) GetEventByID(ctx context.Context, id int) (*model.Event, er
 	return model.NewEvent(dbEvent), nil
 }
 
-func (bm BotManager) RestoreReminders(ctx context.Context, rm ReminderScheduler) error {
-	statusId := db.StatusEnabled
-	events, err := bm.eventsRepo.EventsByFilters(ctx, &db.EventSearch{StatusID: &statusId}, db.PagerNoLimit)
-	if err != nil {
-		bm.Errorf("Ошибка восстановления напоминаний: %v", err)
-		return err
-	}
-
-	for _, e := range events {
-		reminderEvent := model.NewReminderEvent(&e)
-
-		if e.Periodicity != nil && e.SendAt.Before(time.Now()) {
-			nextTime := rm.CalculateNextTime(reminderEvent)
-			if nextTime != nil {
-				_, err := bm.eventsRepo.UpdateEvent(ctx, &db.Event{
-					ID:     e.ID,
-					SendAt: *nextTime,
-				}, db.WithColumns("sendAt"))
-				if err != nil {
-					return err
-				}
-				reminderEvent.DateTime = *nextTime
-			}
-		}
-
-		rm.ScheduleReminder(ctx, reminderEvent)
-		bm.Printf("Восстановлено напоминание: ID=%d", e.ID)
-	}
-
-	return nil
-}
-
-type ReminderScheduler interface {
-	ScheduleReminder(ctx context.Context, e model.ReminderEvent) context.CancelFunc
-	CalculateNextTime(e model.ReminderEvent) *time.Time
-}
-
 var (
 	ErrNotFound     = errors.New("event not found")
 	ErrAccessDenied = errors.New("access denied")
