@@ -3,7 +3,6 @@ package reminder
 import (
 	"context"
 	"slices"
-	"sync"
 	"time"
 
 	"event-reminder-bot/pkg/db"
@@ -16,8 +15,6 @@ type ReminderManager struct {
 	embedlog.Logger
 	bm         BotMessenger
 	eventsRepo db.EventsRepo
-	cancels    map[int]context.CancelFunc
-	mu         sync.RWMutex
 }
 
 type BotMessenger interface {
@@ -29,8 +26,45 @@ func NewReminderManager(bm BotMessenger, eventsRepo db.EventsRepo, logger embedl
 	return &ReminderManager{
 		bm:         bm,
 		eventsRepo: eventsRepo,
-		cancels:    make(map[int]context.CancelFunc),
 		Logger:     logger,
+	}
+}
+
+func (rm *ReminderManager) ProcessReminders(ctx context.Context) error {
+	events, err := rm.eventsRepo.EventsToSend(ctx)
+	if err != nil {
+		rm.Errorf("Ошибка получения событий для отправки: %v", err)
+		return err
+	}
+
+	for _, event := range events {
+		rm.processEvent(ctx, &event)
+	}
+
+	return nil
+}
+
+func (rm *ReminderManager) processEvent(ctx context.Context, event *db.Event) {
+	if event.Periodicity != nil {
+		rm.bm.SendReminderPeriodicity(ctx, event.UserTgID, event.Message)
+
+		reminderEvent := model.NewReminderEvent(event)
+		nextTime := rm.CalculateNextTime(reminderEvent)
+
+		if nextTime != nil {
+			event.SendAt = *nextTime
+			_, err := rm.eventsRepo.UpdateEvent(ctx, event, db.WithColumns("sendAt"))
+			if err != nil {
+				rm.Errorf("Ошибка обновления времени события %d: %v", event.ID, err)
+			}
+		} else {
+			_, err := rm.eventsRepo.DeleteEvent(ctx, event.ID)
+			if err != nil {
+				rm.Errorf("Ошибка деактивации события %d: %v", event.ID, err)
+			}
+		}
+	} else {
+		rm.bm.SendReminder(ctx, event.UserTgID, event.Message, event.ID)
 	}
 }
 
@@ -84,112 +118,4 @@ func (rm *ReminderManager) calculateNextWeekday(currentTime time.Time, weekdays 
 	}
 
 	return nil
-}
-
-func (rm *ReminderManager) ScheduleReminder(parentCtx context.Context, e model.ReminderEvent) context.CancelFunc {
-	now := time.Now()
-	duration := e.DateTime.Sub(now)
-
-	if duration <= 0 {
-		if e.Periodicity != nil {
-			nextTime := rm.CalculateNextTime(e)
-			if nextTime != nil {
-				rm.updateEventTime(parentCtx, e.ID, *nextTime)
-				newEvent := e
-				newEvent.DateTime = *nextTime
-				return rm.ScheduleReminder(parentCtx, newEvent)
-			}
-		}
-		return nil
-	}
-
-	childCtx, cancel := context.WithCancel(parentCtx)
-
-	rm.mu.Lock()
-	rm.cancels[e.ID] = cancel
-	rm.mu.Unlock()
-
-	go func(pCtx context.Context, cCtx context.Context, ev model.ReminderEvent, d time.Duration) {
-		defer func() {
-			rm.mu.Lock()
-			delete(rm.cancels, ev.ID)
-			rm.mu.Unlock()
-			cancel()
-		}()
-
-		select {
-		case <-time.After(d):
-			dbEvent, err := rm.eventsRepo.EventByID(pCtx, ev.ID)
-			if err != nil {
-				return
-			}
-
-			if dbEvent != nil && dbEvent.StatusID == db.StatusEnabled {
-				if dbEvent.Periodicity != nil {
-					rm.bm.SendReminderPeriodicity(pCtx, ev.ChatID, ev.Text)
-					reminderEvent := model.NewReminderEvent(dbEvent)
-					nextTime := rm.CalculateNextTime(reminderEvent)
-					if nextTime != nil {
-						rm.updateEventTime(pCtx, ev.ID, *nextTime)
-						newEvent := reminderEvent
-						newEvent.DateTime = *nextTime
-						rm.ScheduleReminder(pCtx, newEvent)
-					} else {
-						_, err = rm.eventsRepo.DeleteEvent(pCtx, ev.ID)
-						if err != nil {
-							rm.Errorf("Ошибка деактивации события %d: %v", ev.ID, err)
-						}
-					}
-				} else {
-					rm.bm.SendReminder(pCtx, ev.ChatID, ev.Text, ev.ID)
-					if err != nil {
-						rm.Errorf("Ошибка деактивации события %d: %v", ev.ID, err)
-					}
-				}
-			}
-		case <-cCtx.Done():
-			return
-		}
-	}(parentCtx, childCtx, e, duration)
-
-	return cancel
-}
-
-func (rm *ReminderManager) updateEventTime(ctx context.Context, eventID int, newTime time.Time) {
-	dbEvent := &db.Event{
-		ID:     eventID,
-		SendAt: newTime,
-	}
-	_, err := rm.eventsRepo.UpdateEvent(ctx, dbEvent, db.WithColumns("sendAt"))
-	if err != nil {
-		rm.Errorf("Ошибка обновления времени события %d: %v", eventID, err)
-	}
-}
-
-func NewEvent(e *model.Event) model.ReminderEvent {
-	return model.ReminderEvent{
-		ID:          e.ID,
-		OriginalID:  e.OriginalID,
-		ChatID:      e.ChatID,
-		Text:        e.Text,
-		DateTime:    e.DateTime,
-		Weekdays:    e.Weekdays,
-		Periodicity: e.Periodicity,
-	}
-}
-
-func (rm *ReminderManager) CancelReminder(eventID int) {
-	rm.mu.RLock()
-	cancel, exists := rm.cancels[eventID]
-	rm.mu.RUnlock()
-
-	if exists {
-		cancel()
-
-		rm.mu.Lock()
-		delete(rm.cancels, eventID)
-		rm.mu.Unlock()
-
-		rm.Printf("Напоминание ID=%d отменено", eventID)
-	}
 }

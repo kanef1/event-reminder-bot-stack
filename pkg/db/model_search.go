@@ -63,6 +63,7 @@ type EventSearch struct {
 	StatusID         *int
 	Periodicity      *string
 	IDs              []int
+	SendAtBefore     *time.Time
 	MessageILike     *string
 	PeriodicityILike *string
 }
@@ -94,6 +95,9 @@ func (es *EventSearch) Apply(query *orm.Query) *orm.Query {
 	}
 	if len(es.IDs) > 0 {
 		Filter{Columns.Event.ID, es.IDs, SearchTypeArray, false}.Apply(query)
+	}
+	if es.SendAtBefore != nil {
+		Filter{Columns.Event.SendAt, *es.SendAtBefore, SearchTypeLE, false}.Apply(query)
 	}
 	if es.MessageILike != nil {
 		Filter{Columns.Event.Message, *es.MessageILike, SearchTypeILike, false}.Apply(query)

@@ -63,7 +63,7 @@ func StartHandler(ctx context.Context, b *bot.Bot, update *models.Update) {
 		ChatID: update.Message.Chat.ID,
 		Text: "Добрый день, данный бот предназначен для простого планирования.\n" +
 			"Список умений:\n" +
-			"Добавить событие: /add 2025-08-08 21:05 <Текст>\n" +
+			"Добавить событие: /add <YYYY-MM-DD HH:MM>\n <Текст>\n" +
 			"Список событий: /list \n" +
 			"Удалить событие: /delete id\n" +
 			"Перенести событие: /snooze <id> <YYYY-MM-DD HH:MM>\n" +
@@ -78,7 +78,7 @@ func HelpHandler(ctx context.Context, b *bot.Bot, update *models.Update) {
 	_, err := b.SendMessage(ctx, &bot.SendMessageParams{
 		ChatID: update.Message.Chat.ID,
 		Text: "Список умений:\n" +
-			"Добавить событие: /add 2025-08-08 21:05 <Текст>\n" +
+			"Добавить событие: /add <YYYY-MM-DD HH:MM>\n <Текст>\n" +
 			"Список событий: /list\n" +
 			"Удалить событие: /delete id\n" +
 			"Перенести событие: /snooze <id> <YYYY-MM-DD HH:MM>\n" +
@@ -866,43 +866,6 @@ func (bm BotManager) GetEventByID(ctx context.Context, id int) (*model.Event, er
 	}
 
 	return model.NewEvent(dbEvent), nil
-}
-
-func (bm BotManager) RestoreReminders(ctx context.Context, rm ReminderScheduler) error {
-	statusId := db.StatusEnabled
-	events, err := bm.eventsRepo.EventsByFilters(ctx, &db.EventSearch{StatusID: &statusId}, db.PagerNoLimit)
-	if err != nil {
-		bm.Errorf("Ошибка восстановления напоминаний: %v", err)
-		return err
-	}
-
-	for _, e := range events {
-		reminderEvent := model.NewReminderEvent(&e)
-
-		if e.Periodicity != nil && e.SendAt.Before(time.Now()) {
-			nextTime := rm.CalculateNextTime(reminderEvent)
-			if nextTime != nil {
-				_, err := bm.eventsRepo.UpdateEvent(ctx, &db.Event{
-					ID:     e.ID,
-					SendAt: *nextTime,
-				}, db.WithColumns("sendAt"))
-				if err != nil {
-					return err
-				}
-				reminderEvent.DateTime = *nextTime
-			}
-		}
-
-		rm.ScheduleReminder(ctx, reminderEvent)
-		bm.Printf("Восстановлено напоминание: ID=%d", e.ID)
-	}
-
-	return nil
-}
-
-type ReminderScheduler interface {
-	ScheduleReminder(ctx context.Context, e model.ReminderEvent) context.CancelFunc
-	CalculateNextTime(e model.ReminderEvent) *time.Time
 }
 
 var (
