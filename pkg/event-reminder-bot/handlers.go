@@ -103,7 +103,7 @@ func HelpHandler(ctx context.Context, b *bot.Bot, update *models.Update) {
 	}
 }
 
-func (bm BotManager) DeleteHandler(ctx context.Context, b *bot.Bot, update *models.Update) {
+func (bm *BotManager) DeleteHandler(ctx context.Context, b *bot.Bot, update *models.Update) {
 	args := strings.TrimSpace(strings.TrimPrefix(update.Message.Text, "/delete"))
 	if args == "" {
 		_, err := b.SendMessage(ctx, &bot.SendMessageParams{
@@ -173,7 +173,7 @@ func (bm BotManager) DeleteHandler(ctx context.Context, b *bot.Bot, update *mode
 	bm.OnError(err)
 }
 
-func (bm BotManager) GetUserEventsPaged(ctx context.Context, chatID int64, page int, pageSize int) ([]model.Event, int, error) {
+func (bm *BotManager) GetUserEventsPaged(ctx context.Context, chatID int64, page int, pageSize int) ([]model.Event, int, error) {
 	events, err := bm.GetUserEvents(ctx, chatID)
 	if err != nil {
 		return nil, 0, err
@@ -193,7 +193,7 @@ func (bm BotManager) GetUserEventsPaged(ctx context.Context, chatID int64, page 
 	return events[start:end], total, nil
 }
 
-func (bm BotManager) ListHandler(ctx context.Context, b *bot.Bot, update *models.Update) {
+func (bm *BotManager) ListHandler(ctx context.Context, b *bot.Bot, update *models.Update) {
 	page := 1
 	pageSize := 10
 
@@ -338,7 +338,7 @@ func DayName(day int) string {
 	}
 }
 
-func (bm BotManager) SendDailyEvents(ctx context.Context) {
+func (bm *BotManager) SendDailyEvents(ctx context.Context) {
 	users, err := bm.EventsRepo.AllUsersWithEventsToday(ctx)
 	if err != nil {
 		bm.Errorf("Ошибка получения пользователей: %v", err)
@@ -429,7 +429,7 @@ func (bm *BotManager) OnError(err error) {
 	bm.Errorf("%v", err)
 }
 
-func (bm BotManager) SendReminder(ctx context.Context, chatID int64, text string, eventID int) {
+func (bm *BotManager) SendReminder(ctx context.Context, chatID int64, text string, eventID int) {
 	keyboard := &models.InlineKeyboardMarkup{
 		InlineKeyboard: [][]models.InlineKeyboardButton{
 			{
@@ -455,7 +455,7 @@ func (bm BotManager) SendReminder(ctx context.Context, chatID int64, text string
 	}
 }
 
-func (bm BotManager) SendReminderPeriodicity(ctx context.Context, chatID int64, text string) {
+func (bm *BotManager) SendReminderPeriodicity(ctx context.Context, chatID int64, text string) {
 	_, err := bm.b.SendMessage(ctx, &bot.SendMessageParams{
 		ChatID: chatID,
 		Text:   "🔔 Напоминание: " + text,
@@ -463,7 +463,7 @@ func (bm BotManager) SendReminderPeriodicity(ctx context.Context, chatID int64, 
 	bm.OnError(err)
 }
 
-func (bm BotManager) AddEvent(ctx context.Context, chatId int64, parts []string) (*model.Event, error) {
+func (bm *BotManager) AddEvent(ctx context.Context, chatId int64, parts []string) (*model.Event, error) {
 	datePart := parts[0]
 	timePart := parts[1]
 	text := parts[2]
@@ -510,7 +510,7 @@ func (bm BotManager) AddEvent(ctx context.Context, chatId int64, parts []string)
 	return model.NewEvent(addedEvent), nil
 }
 
-func (bm BotManager) askForPeriodicity(ctx context.Context, chatID int64, eventID int) error {
+func (bm *BotManager) askForPeriodicity(ctx context.Context, chatID int64, eventID int) error {
 	keyboard := &models.InlineKeyboardMarkup{
 		InlineKeyboard: [][]models.InlineKeyboardButton{
 			{
@@ -539,7 +539,7 @@ func (bm BotManager) askForPeriodicity(ctx context.Context, chatID int64, eventI
 	return err
 }
 
-func (bm BotManager) askForWeekdays(ctx context.Context, chatID int64, eventID int, selectedDays []int) error {
+func (bm *BotManager) askForWeekdays(ctx context.Context, chatID int64, eventID int, selectedDays []int) error {
 	keyboard := bm.makeWeekdaysKeyboard(eventID, selectedDays)
 	_, err := bm.b.SendMessage(ctx, &bot.SendMessageParams{
 		ChatID:      chatID,
@@ -549,7 +549,7 @@ func (bm BotManager) askForWeekdays(ctx context.Context, chatID int64, eventID i
 	return err
 }
 
-func (bm BotManager) makeWeekdaysKeyboard(eventID int, selectedDays []int) *models.InlineKeyboardMarkup {
+func (bm *BotManager) makeWeekdaysKeyboard(eventID int, selectedDays []int) *models.InlineKeyboardMarkup {
 	res := &models.InlineKeyboardMarkup{InlineKeyboard: [][]models.InlineKeyboardButton{}}
 
 	for _, weekDay := range weekDays {
@@ -582,7 +582,7 @@ func (bm BotManager) makeWeekdaysKeyboard(eventID int, selectedDays []int) *mode
 	return res
 }
 
-func (bm BotManager) HandlePeriodicityCallback(ctx context.Context, b *bot.Bot, update *models.Update) {
+func (bm *BotManager) HandlePeriodicityCallback(ctx context.Context, b *bot.Bot, update *models.Update) {
 	if update.CallbackQuery == nil {
 		return
 	}
@@ -599,7 +599,7 @@ func (bm BotManager) HandlePeriodicityCallback(ctx context.Context, b *bot.Bot, 
 	bm.handlePeriodicityCallback(ctx, b, data, chatID, messageID)
 }
 
-func (bm BotManager) HandleWeekdayCallback(ctx context.Context, b *bot.Bot, update *models.Update) {
+func (bm *BotManager) HandleWeekdayCallback(ctx context.Context, b *bot.Bot, update *models.Update) {
 	if update.CallbackQuery == nil {
 		return
 	}
@@ -616,7 +616,7 @@ func (bm BotManager) HandleWeekdayCallback(ctx context.Context, b *bot.Bot, upda
 	bm.handleWeekdayCallback(ctx, b, data, chatID, messageID)
 }
 
-func (bm BotManager) HandleWeekdaysDoneCallback(ctx context.Context, b *bot.Bot, update *models.Update) {
+func (bm *BotManager) HandleWeekdaysDoneCallback(ctx context.Context, b *bot.Bot, update *models.Update) {
 	if update.CallbackQuery == nil {
 		return
 	}
@@ -633,7 +633,7 @@ func (bm BotManager) HandleWeekdaysDoneCallback(ctx context.Context, b *bot.Bot,
 	bm.handleWeekdaysDoneCallback(ctx, b, data, chatID, messageID)
 }
 
-func (bm BotManager) handlePeriodicityCallback(ctx context.Context, b *bot.Bot, data string, chatID int64, messageID int) {
+func (bm *BotManager) handlePeriodicityCallback(ctx context.Context, b *bot.Bot, data string, chatID int64, messageID int) {
 	parts := strings.Split(data, ":")
 	if len(parts) < 3 {
 		return
@@ -732,7 +732,7 @@ func (bm BotManager) handlePeriodicityCallback(ctx context.Context, b *bot.Bot, 
 	bm.OnError(err)
 }
 
-func (bm BotManager) handleWeekdayCallback(ctx context.Context, b *bot.Bot, data string, chatID int64, messageID int) {
+func (bm *BotManager) handleWeekdayCallback(ctx context.Context, b *bot.Bot, data string, chatID int64, messageID int) {
 	parts := strings.Split(data, ":")
 	if len(parts) < 3 {
 		return
@@ -772,7 +772,7 @@ func (bm BotManager) handleWeekdayCallback(ctx context.Context, b *bot.Bot, data
 	bm.OnError(err)
 }
 
-func (bm BotManager) handleWeekdaysDoneCallback(ctx context.Context, b *bot.Bot, data string, chatID int64, messageID int) {
+func (bm *BotManager) handleWeekdaysDoneCallback(ctx context.Context, b *bot.Bot, data string, chatID int64, messageID int) {
 	parts := strings.Split(data, ":")
 	if len(parts) < 2 {
 		return
@@ -857,7 +857,7 @@ func getPeriodicityText(periodType string) string {
 	}
 }
 
-func (bm BotManager) DeleteEventByID(ctx context.Context, id int) error {
+func (bm *BotManager) DeleteEventByID(ctx context.Context, id int) error {
 	event, err := bm.EventsRepo.EventByID(ctx, id)
 	if err != nil {
 		return err
@@ -879,7 +879,7 @@ func (bm BotManager) DeleteEventByID(ctx context.Context, id int) error {
 	return nil
 }
 
-func (bm BotManager) GetUserEvents(ctx context.Context, chatID int64) ([]model.Event, error) {
+func (bm *BotManager) GetUserEvents(ctx context.Context, chatID int64) ([]model.Event, error) {
 	statusId := db.StatusEnabled
 	search := &db.EventSearch{
 		UserTgID: &chatID,
@@ -897,7 +897,7 @@ func (bm BotManager) GetUserEvents(ctx context.Context, chatID int64) ([]model.E
 	return model.NewEvents(dbEvents), nil
 }
 
-func (bm BotManager) GetEventByID(ctx context.Context, id int) (*model.Event, error) {
+func (bm *BotManager) GetEventByID(ctx context.Context, id int) (*model.Event, error) {
 	dbEvent, err := bm.EventsRepo.EventByID(ctx, id)
 	if err != nil {
 		return nil, err
@@ -917,7 +917,7 @@ var (
 	ErrPastDate     = errors.New("past_date")
 )
 
-func (bm BotManager) SnoozeEvent(ctx context.Context, eventID int, userTgID int64, newTime time.Time) error {
+func (bm *BotManager) SnoozeEvent(ctx context.Context, eventID int, userTgID int64, newTime time.Time) error {
 	event, err := bm.EventsRepo.EventByID(ctx, eventID)
 	if err != nil {
 		return err
@@ -946,7 +946,7 @@ func (bm BotManager) SnoozeEvent(ctx context.Context, eventID int, userTgID int6
 
 	return nil
 }
-func (bm BotManager) HandleEventDetail(ctx context.Context, b *bot.Bot, data string, chatID int64, messageID int) {
+func (bm *BotManager) HandleEventDetail(ctx context.Context, b *bot.Bot, data string, chatID int64, messageID int) {
 	eventIDStr := strings.TrimPrefix(data, EventDetailPrefix)
 	eventID, err := strconv.Atoi(eventIDStr)
 	if err != nil {
@@ -1018,7 +1018,7 @@ func (bm BotManager) HandleEventDetail(ctx context.Context, b *bot.Bot, data str
 	bm.OnError(err)
 }
 
-func (bm BotManager) HandleEventEdit(ctx context.Context, b *bot.Bot, data string, chatID int64, messageID int) {
+func (bm *BotManager) HandleEventEdit(ctx context.Context, b *bot.Bot, data string, chatID int64, messageID int) {
 	eventIDStr := strings.TrimPrefix(data, eventEditPrefix)
 	eventID, err := strconv.Atoi(eventIDStr)
 	if err != nil {
@@ -1043,7 +1043,7 @@ func (bm BotManager) HandleEventEdit(ctx context.Context, b *bot.Bot, data strin
 	bm.OnError(err)
 }
 
-func (bm BotManager) HandleEventDelete(ctx context.Context, b *bot.Bot, data string, chatID int64, messageID int) {
+func (bm *BotManager) HandleEventDelete(ctx context.Context, b *bot.Bot, data string, chatID int64, messageID int) {
 	eventIDStr := strings.TrimPrefix(data, eventDeletePrefix)
 	eventID, err := strconv.Atoi(eventIDStr)
 	if err != nil {
@@ -1087,7 +1087,7 @@ func (bm BotManager) HandleEventDelete(ctx context.Context, b *bot.Bot, data str
 	bm.OnError(err)
 }
 
-func (bm BotManager) HandleBackToList(ctx context.Context, b *bot.Bot, chatID int64, messageID int) {
+func (bm *BotManager) HandleBackToList(ctx context.Context, b *bot.Bot, chatID int64, messageID int) {
 	page := 1
 	pageSize := 10
 
@@ -1201,7 +1201,7 @@ func (bm BotManager) HandleBackToList(ctx context.Context, b *bot.Bot, chatID in
 	})
 	bm.OnError(err)
 }
-func (bm BotManager) HandleEditDate(ctx context.Context, b *bot.Bot, data string, chatID int64, messageID int) {
+func (bm *BotManager) HandleEditDate(ctx context.Context, b *bot.Bot, data string, chatID int64, messageID int) {
 	eventIDStr := strings.TrimPrefix(data, editDatePrefix)
 	eventID, err := strconv.Atoi(eventIDStr)
 	if err != nil {
@@ -1227,7 +1227,7 @@ func (bm BotManager) HandleEditDate(ctx context.Context, b *bot.Bot, data string
 	bm.OnError(err)
 }
 
-func (bm BotManager) HandlePostpone(ctx context.Context, b *bot.Bot, data string, chatID int64, messageID int) {
+func (bm *BotManager) HandlePostpone(ctx context.Context, b *bot.Bot, data string, chatID int64, messageID int) {
 	var duration time.Duration
 	var eventID int
 	var err error
@@ -1290,7 +1290,7 @@ func (bm BotManager) HandlePostpone(ctx context.Context, b *bot.Bot, data string
 	bm.OnError(err)
 }
 
-func (bm BotManager) HandlePostponeCustom(ctx context.Context, b *bot.Bot, data string, chatID int64, messageID int) {
+func (bm *BotManager) HandlePostponeCustom(ctx context.Context, b *bot.Bot, data string, chatID int64, messageID int) {
 	eventIDStr := strings.TrimPrefix(data, postponeCustom)
 	eventID, err := strconv.Atoi(eventIDStr)
 	if err != nil {
@@ -1312,7 +1312,7 @@ func (bm BotManager) HandlePostponeCustom(ctx context.Context, b *bot.Bot, data 
 	bm.OnError(err)
 }
 
-func (bm BotManager) HandleEditDescription(ctx context.Context, b *bot.Bot, data string, chatID int64, messageID int) {
+func (bm *BotManager) HandleEditDescription(ctx context.Context, b *bot.Bot, data string, chatID int64, messageID int) {
 	eventIDStr := strings.TrimPrefix(data, editDescPrefix)
 	eventID, err := strconv.Atoi(eventIDStr)
 	if err != nil {
@@ -1334,7 +1334,7 @@ func (bm BotManager) HandleEditDescription(ctx context.Context, b *bot.Bot, data
 	bm.OnError(err)
 }
 
-func (bm BotManager) HandleEditPeriodicity(ctx context.Context, b *bot.Bot, data string, chatID int64, messageID int) {
+func (bm *BotManager) HandleEditPeriodicity(ctx context.Context, b *bot.Bot, data string, chatID int64, messageID int) {
 	eventIDStr := strings.TrimPrefix(data, editPeriodicityPrefix)
 	eventID, err := strconv.Atoi(eventIDStr)
 	if err != nil {
@@ -1371,7 +1371,7 @@ func (bm BotManager) HandleEditPeriodicity(ctx context.Context, b *bot.Bot, data
 	bm.OnError(err)
 }
 
-func (bm BotManager) HandleEditPeriodicityCallback(ctx context.Context, b *bot.Bot, data string, chatID int64, messageID int) {
+func (bm *BotManager) HandleEditPeriodicityCallback(ctx context.Context, b *bot.Bot, data string, chatID int64, messageID int) {
 	parts := strings.Split(data, ":")
 	if len(parts) < 3 {
 		return
@@ -1452,7 +1452,7 @@ func (bm BotManager) HandleEditPeriodicityCallback(ctx context.Context, b *bot.B
 	bm.OnError(err)
 }
 
-func (bm BotManager) askForWeekdaysEdit(ctx context.Context, b *bot.Bot, chatID int64, messageID int, eventID int, selectedDays []int) error {
+func (bm *BotManager) askForWeekdaysEdit(ctx context.Context, b *bot.Bot, chatID int64, messageID int, eventID int, selectedDays []int) error {
 	keyboard := bm.makeWeekdaysEditKeyboard(eventID, selectedDays)
 	_, err := b.EditMessageText(ctx, &bot.EditMessageTextParams{
 		ChatID:      chatID,
@@ -1463,7 +1463,7 @@ func (bm BotManager) askForWeekdaysEdit(ctx context.Context, b *bot.Bot, chatID 
 	return err
 }
 
-func (bm BotManager) makeWeekdaysEditKeyboard(eventID int, selectedDays []int) *models.InlineKeyboardMarkup {
+func (bm *BotManager) makeWeekdaysEditKeyboard(eventID int, selectedDays []int) *models.InlineKeyboardMarkup {
 	res := &models.InlineKeyboardMarkup{InlineKeyboard: [][]models.InlineKeyboardButton{}}
 
 	for _, weekDay := range weekDays {
@@ -1497,7 +1497,7 @@ func (bm BotManager) makeWeekdaysEditKeyboard(eventID int, selectedDays []int) *
 	return res
 }
 
-func (bm BotManager) HandleEditWeekday(ctx context.Context, b *bot.Bot, data string, chatID int64, messageID int) {
+func (bm *BotManager) HandleEditWeekday(ctx context.Context, b *bot.Bot, data string, chatID int64, messageID int) {
 	parts := strings.Split(data, ":")
 	if len(parts) < 3 {
 		return
@@ -1541,7 +1541,7 @@ func (bm BotManager) HandleEditWeekday(ctx context.Context, b *bot.Bot, data str
 	bm.OnError(err)
 }
 
-func (bm BotManager) HandleEditWeekdaysDone(ctx context.Context, b *bot.Bot, data string, chatID int64, messageID int) {
+func (bm *BotManager) HandleEditWeekdaysDone(ctx context.Context, b *bot.Bot, data string, chatID int64, messageID int) {
 	parts := strings.Split(data, ":")
 	if len(parts) < 2 {
 		return
