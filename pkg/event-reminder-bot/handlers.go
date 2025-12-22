@@ -8,6 +8,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"event-reminder-bot/pkg/db"
@@ -21,13 +22,26 @@ import (
 const MaxPeriodic = 100
 
 const (
-	Monday    = "1"
-	Tuesday   = "2"
-	Wednesday = "3"
-	Thursday  = "4"
-	Friday    = "5"
-	Saturday  = "6"
-	Sunday    = "7"
+	Monday            = "1"
+	Tuesday           = "2"
+	Wednesday         = "3"
+	Thursday          = "4"
+	Friday            = "5"
+	Saturday          = "6"
+	Sunday            = "7"
+	EventDetailPrefix = "event_detail_"
+	eventEditPrefix   = "event_edit_"
+	eventDeletePrefix = "event_delete_"
+	eventBackToList   = "back_to_list"
+
+	editDatePrefix        = "edit_date_"
+	editDescPrefix        = "edit_desc_"
+	editPeriodicityPrefix = "edit_periodicity_"
+
+	postponeHour   = "postpone_hour_"
+	postponeDay    = "postpone_day_"
+	postponeWeek   = "postpone_week_"
+	postponeCustom = "postpone_custom_"
 )
 
 type WeekDay struct {
@@ -89,14 +103,14 @@ func HelpHandler(ctx context.Context, b *bot.Bot, update *models.Update) {
 	}
 }
 
-func (bm BotManager) DeleteHandler(ctx context.Context, b *bot.Bot, update *models.Update) {
+func (bm *BotManager) DeleteHandler(ctx context.Context, b *bot.Bot, update *models.Update) {
 	args := strings.TrimSpace(strings.TrimPrefix(update.Message.Text, "/delete"))
 	if args == "" {
 		_, err := b.SendMessage(ctx, &bot.SendMessageParams{
 			ChatID: update.Message.Chat.ID,
 			Text:   "❗ Укажите ID события, например: /delete 123",
 		})
-		bm.onError(err)
+		bm.OnError(err)
 		return
 	}
 
@@ -106,7 +120,7 @@ func (bm BotManager) DeleteHandler(ctx context.Context, b *bot.Bot, update *mode
 			ChatID: update.Message.Chat.ID,
 			Text:   "❗ Номер события должен быть положительным числом",
 		})
-		bm.onError(err)
+		bm.OnError(err)
 		return
 	}
 
@@ -117,7 +131,7 @@ func (bm BotManager) DeleteHandler(ctx context.Context, b *bot.Bot, update *mode
 			ChatID: update.Message.Chat.ID,
 			Text:   "❌ Ошибка при загрузке событий",
 		})
-		bm.onError(err)
+		bm.OnError(err)
 		return
 	}
 
@@ -126,7 +140,7 @@ func (bm BotManager) DeleteHandler(ctx context.Context, b *bot.Bot, update *mode
 			ChatID: update.Message.Chat.ID,
 			Text:   "🔍 У вас нет событий для удаления",
 		})
-		bm.onError(err)
+		bm.OnError(err)
 		return
 	}
 
@@ -135,7 +149,7 @@ func (bm BotManager) DeleteHandler(ctx context.Context, b *bot.Bot, update *mode
 			ChatID: update.Message.Chat.ID,
 			Text:   fmt.Sprintf("❗ Нет события с номером %d", index),
 		})
-		bm.onError(err)
+		bm.OnError(err)
 		return
 	}
 
@@ -148,7 +162,7 @@ func (bm BotManager) DeleteHandler(ctx context.Context, b *bot.Bot, update *mode
 			ChatID: update.Message.Chat.ID,
 			Text:   "❌ Ошибка при удалении события",
 		})
-		bm.onError(err)
+		bm.OnError(err)
 		return
 	}
 
@@ -156,30 +170,33 @@ func (bm BotManager) DeleteHandler(ctx context.Context, b *bot.Bot, update *mode
 		ChatID: update.Message.Chat.ID,
 		Text:   "✅ Событие удалено!",
 	})
-	bm.onError(err)
+	bm.OnError(err)
 }
 
-func (bm BotManager) GetUserEventsPaged(ctx context.Context, chatID int64, page int, pageSize int) ([]model.Event, int, error) {
-	events, err := bm.GetUserEvents(ctx, chatID)
+func (bm *BotManager) GetUserEventsPaged(ctx context.Context, chatID int64, page int, pageSize int) ([]model.Event, int, error) {
+	statusId := db.StatusEnabled
+	search := &db.EventSearch{
+		UserTgID: &chatID,
+		StatusID: &statusId,
+	}
+
+	// Получаем общее количество событий
+	total, err := bm.EventsRepo.CountEvents(ctx, search)
 	if err != nil {
 		return nil, 0, err
 	}
 
-	total := len(events)
-	start := (page - 1) * pageSize
-	if start >= total {
-		return []model.Event{}, total, nil
+	// Получаем события с пагинацией
+	pager := db.NewPager(page, pageSize)
+	dbEvents, err := bm.EventsRepo.EventsByFilters(ctx, search, pager, bm.EventsRepo.DefaultEventSort())
+	if err != nil {
+		return nil, 0, err
 	}
 
-	end := start + pageSize
-	if end > total {
-		end = total
-	}
-
-	return events[start:end], total, nil
+	return model.NewEvents(dbEvents), total, nil
 }
 
-func (bm BotManager) ListHandler(ctx context.Context, b *bot.Bot, update *models.Update) {
+func (bm *BotManager) ListHandler(ctx context.Context, b *bot.Bot, update *models.Update) {
 	page := 1
 	pageSize := 10
 
@@ -190,14 +207,14 @@ func (bm BotManager) ListHandler(ctx context.Context, b *bot.Bot, update *models
 		}
 	}
 
-	events, err := bm.GetUserEvents(ctx, update.Message.Chat.ID)
+	events, total, err := bm.GetUserEventsPaged(ctx, update.Message.Chat.ID, page, pageSize)
 	if err != nil {
 		bm.Errorf("Ошибка загрузки событий: %v", err)
 		_, err = b.SendMessage(ctx, &bot.SendMessageParams{
 			ChatID: update.Message.Chat.ID,
 			Text:   "❌ Ошибка при загрузке событий",
 		})
-		bm.onError(err)
+		bm.OnError(err)
 		return
 	}
 
@@ -209,21 +226,9 @@ func (bm BotManager) ListHandler(ctx context.Context, b *bot.Bot, update *models
 		return
 	}
 
-	total := len(events)
 	start := (page - 1) * pageSize
-	if start >= total {
-		start = 0
-		page = 1
-	}
 
-	end := start + pageSize
-	if end > total {
-		end = total
-	}
-
-	pageEvents := events[start:end]
-
-	periodicCount, err := bm.eventsRepo.CountUserPeriodicEvents(ctx, update.Message.Chat.ID)
+	periodicCount, err := bm.EventsRepo.CountUserPeriodicEvents(ctx, update.Message.Chat.ID)
 	if err != nil {
 		bm.Errorf("Ошибка подсчета периодических событий: %v", err)
 		periodicCount = 0
@@ -233,7 +238,7 @@ func (bm BotManager) ListHandler(ctx context.Context, b *bot.Bot, update *models
 	msg.WriteString("📅 Список событий:\n\n")
 	msg.WriteString(fmt.Sprintf("📊 Периодических уведомлений: %d/%d\n\n", periodicCount, MaxPeriodic))
 
-	for i, e := range pageEvents {
+	for i, e := range events {
 		msg.WriteString(fmt.Sprintf("%d. %s — ", start+i+1, e.Text))
 		msg.WriteString(fmt.Sprintf("%s\n", e.DateTime.Format("2006-01-02 15:04")))
 
@@ -248,7 +253,7 @@ func (bm BotManager) ListHandler(ctx context.Context, b *bot.Bot, update *models
 			case "weekdays":
 				var days []string
 				for _, day := range e.Weekdays {
-					days = append(days, dayName(day))
+					days = append(days, DayName(day))
 				}
 				msg.WriteString(fmt.Sprintf("🔄 По дням: %s\n", strings.Join(days, ", ")))
 			}
@@ -259,20 +264,38 @@ func (bm BotManager) ListHandler(ctx context.Context, b *bot.Bot, update *models
 
 	var buttons [][]models.InlineKeyboardButton
 
+	var row []models.InlineKeyboardButton
+	for i := range events {
+		eventNum := start + i + 1
+		row = append(row, models.InlineKeyboardButton{
+			Text:         fmt.Sprintf("%d", eventNum),
+			CallbackData: fmt.Sprintf("%s%d", EventDetailPrefix, events[i].ID),
+		})
+
+		if len(row) == 5 {
+			buttons = append(buttons, row)
+			row = []models.InlineKeyboardButton{}
+		}
+	}
+	if len(row) > 0 {
+		buttons = append(buttons, row)
+	}
+
+	var navRow []models.InlineKeyboardButton
 	if page > 1 {
-		buttons = append(buttons, []models.InlineKeyboardButton{
-			{Text: "⬅️ Назад", CallbackData: fmt.Sprintf("page_%d", page-1)},
+		navRow = append(navRow, models.InlineKeyboardButton{
+			Text:         "⬅️ Назад",
+			CallbackData: fmt.Sprintf("page_%d", page-1),
 		})
 	}
-
-	if end < total {
-		buttons = append(buttons, []models.InlineKeyboardButton{
-			{Text: "➡️ Далее", CallbackData: fmt.Sprintf("page_%d", page+1)},
+	if start+pageSize < total {
+		navRow = append(navRow, models.InlineKeyboardButton{
+			Text:         "➡️ Далее",
+			CallbackData: fmt.Sprintf("page_%d", page+1),
 		})
 	}
-
-	if buttons == nil {
-		buttons = [][]models.InlineKeyboardButton{}
+	if len(navRow) > 0 {
+		buttons = append(buttons, navRow)
 	}
 
 	_, err = b.SendMessage(ctx, &bot.SendMessageParams{
@@ -282,9 +305,10 @@ func (bm BotManager) ListHandler(ctx context.Context, b *bot.Bot, update *models
 			InlineKeyboard: buttons,
 		},
 	})
-	bm.onError(err)
+	bm.OnError(err)
 }
-func dayName(day int) string {
+
+func DayName(day int) string {
 	switch day {
 	case 1:
 		return "Пн"
@@ -305,8 +329,8 @@ func dayName(day int) string {
 	}
 }
 
-func (bm BotManager) SendDailyEvents(ctx context.Context) {
-	users, err := bm.eventsRepo.AllUsersWithEventsToday(ctx)
+func (bm *BotManager) SendDailyEvents(ctx context.Context) {
+	users, err := bm.EventsRepo.AllUsersWithEventsToday(ctx)
 	if err != nil {
 		bm.Errorf("Ошибка получения пользователей: %v", err)
 		return
@@ -349,7 +373,7 @@ func (bm BotManager) SendDailyEvents(ctx context.Context) {
 				case "weekdays":
 					var days []string
 					for _, d := range e.Weekdays {
-						days = append(days, dayName(d))
+						days = append(days, DayName(d))
 					}
 					msg.WriteString(fmt.Sprintf("🔄 По дням: %s\n", strings.Join(days, ", ")))
 				}
@@ -362,32 +386,41 @@ func (bm BotManager) SendDailyEvents(ctx context.Context) {
 			ChatID: userID,
 			Text:   msg.String(),
 		})
-		bm.onError(err)
+		bm.OnError(err)
 	}
+}
+
+type EditState struct {
+	EventID    int
+	WaitingFor string
 }
 
 type BotManager struct {
 	embedlog.Logger
 	b          *bot.Bot
-	eventsRepo db.EventsRepo
+	EventsRepo db.EventsRepo
+	EditStates map[int64]*EditState
+	Mu         sync.RWMutex
 }
 
 func NewBotManager(b *bot.Bot, eventsRepo db.EventsRepo, logger embedlog.Logger) *BotManager {
 	return &BotManager{
 		b:          b,
-		eventsRepo: eventsRepo,
+		EventsRepo: eventsRepo,
 		Logger:     logger,
+		EditStates: make(map[int64]*EditState),
+		Mu:         sync.RWMutex{},
 	}
 }
 
-func (bm *BotManager) onError(err error) {
+func (bm *BotManager) OnError(err error) {
 	if err == nil {
 		return
 	}
 	bm.Errorf("%v", err)
 }
 
-func (bm BotManager) SendReminder(ctx context.Context, chatID int64, text string, eventID int) {
+func (bm *BotManager) SendReminder(ctx context.Context, chatID int64, text string, eventID int) {
 	keyboard := &models.InlineKeyboardMarkup{
 		InlineKeyboard: [][]models.InlineKeyboardButton{
 			{
@@ -413,15 +446,15 @@ func (bm BotManager) SendReminder(ctx context.Context, chatID int64, text string
 	}
 }
 
-func (bm BotManager) SendReminderPeriodicity(ctx context.Context, chatID int64, text string) {
+func (bm *BotManager) SendReminderPeriodicity(ctx context.Context, chatID int64, text string) {
 	_, err := bm.b.SendMessage(ctx, &bot.SendMessageParams{
 		ChatID: chatID,
 		Text:   "🔔 Напоминание: " + text,
 	})
-	bm.onError(err)
+	bm.OnError(err)
 }
 
-func (bm BotManager) AddEvent(ctx context.Context, chatId int64, parts []string) (*model.Event, error) {
+func (bm *BotManager) AddEvent(ctx context.Context, chatId int64, parts []string) (*model.Event, error) {
 	datePart := parts[0]
 	timePart := parts[1]
 	text := parts[2]
@@ -454,7 +487,7 @@ func (bm BotManager) AddEvent(ctx context.Context, chatId int64, parts []string)
 		Periodicity: nil,
 	}
 
-	addedEvent, err := bm.eventsRepo.AddEvent(ctx, event)
+	addedEvent, err := bm.EventsRepo.AddEvent(ctx, event)
 	if err != nil {
 		bm.Errorf("Ошибка сохранения события: %v", err)
 		return nil, err
@@ -468,7 +501,7 @@ func (bm BotManager) AddEvent(ctx context.Context, chatId int64, parts []string)
 	return model.NewEvent(addedEvent), nil
 }
 
-func (bm BotManager) askForPeriodicity(ctx context.Context, chatID int64, eventID int) error {
+func (bm *BotManager) askForPeriodicity(ctx context.Context, chatID int64, eventID int) error {
 	keyboard := &models.InlineKeyboardMarkup{
 		InlineKeyboard: [][]models.InlineKeyboardButton{
 			{
@@ -497,7 +530,7 @@ func (bm BotManager) askForPeriodicity(ctx context.Context, chatID int64, eventI
 	return err
 }
 
-func (bm BotManager) askForWeekdays(ctx context.Context, chatID int64, eventID int, selectedDays []int) error {
+func (bm *BotManager) askForWeekdays(ctx context.Context, chatID int64, eventID int, selectedDays []int) error {
 	keyboard := bm.makeWeekdaysKeyboard(eventID, selectedDays)
 	_, err := bm.b.SendMessage(ctx, &bot.SendMessageParams{
 		ChatID:      chatID,
@@ -507,7 +540,7 @@ func (bm BotManager) askForWeekdays(ctx context.Context, chatID int64, eventID i
 	return err
 }
 
-func (bm BotManager) makeWeekdaysKeyboard(eventID int, selectedDays []int) *models.InlineKeyboardMarkup {
+func (bm *BotManager) makeWeekdaysKeyboard(eventID int, selectedDays []int) *models.InlineKeyboardMarkup {
 	res := &models.InlineKeyboardMarkup{InlineKeyboard: [][]models.InlineKeyboardButton{}}
 
 	for _, weekDay := range weekDays {
@@ -540,7 +573,7 @@ func (bm BotManager) makeWeekdaysKeyboard(eventID int, selectedDays []int) *mode
 	return res
 }
 
-func (bm BotManager) HandlePeriodicityCallback(ctx context.Context, b *bot.Bot, update *models.Update) {
+func (bm *BotManager) HandlePeriodicityCallback(ctx context.Context, b *bot.Bot, update *models.Update) {
 	if update.CallbackQuery == nil {
 		return
 	}
@@ -552,12 +585,12 @@ func (bm BotManager) HandlePeriodicityCallback(ctx context.Context, b *bot.Bot, 
 	_, err := b.AnswerCallbackQuery(ctx, &bot.AnswerCallbackQueryParams{
 		CallbackQueryID: update.CallbackQuery.ID,
 	})
-	bm.onError(err)
+	bm.OnError(err)
 
 	bm.handlePeriodicityCallback(ctx, b, data, chatID, messageID)
 }
 
-func (bm BotManager) HandleWeekdayCallback(ctx context.Context, b *bot.Bot, update *models.Update) {
+func (bm *BotManager) HandleWeekdayCallback(ctx context.Context, b *bot.Bot, update *models.Update) {
 	if update.CallbackQuery == nil {
 		return
 	}
@@ -569,12 +602,12 @@ func (bm BotManager) HandleWeekdayCallback(ctx context.Context, b *bot.Bot, upda
 	_, err := b.AnswerCallbackQuery(ctx, &bot.AnswerCallbackQueryParams{
 		CallbackQueryID: update.CallbackQuery.ID,
 	})
-	bm.onError(err)
+	bm.OnError(err)
 
 	bm.handleWeekdayCallback(ctx, b, data, chatID, messageID)
 }
 
-func (bm BotManager) HandleWeekdaysDoneCallback(ctx context.Context, b *bot.Bot, update *models.Update) {
+func (bm *BotManager) HandleWeekdaysDoneCallback(ctx context.Context, b *bot.Bot, update *models.Update) {
 	if update.CallbackQuery == nil {
 		return
 	}
@@ -586,12 +619,12 @@ func (bm BotManager) HandleWeekdaysDoneCallback(ctx context.Context, b *bot.Bot,
 	_, err := b.AnswerCallbackQuery(ctx, &bot.AnswerCallbackQueryParams{
 		CallbackQueryID: update.CallbackQuery.ID,
 	})
-	bm.onError(err)
+	bm.OnError(err)
 
 	bm.handleWeekdaysDoneCallback(ctx, b, data, chatID, messageID)
 }
 
-func (bm BotManager) handlePeriodicityCallback(ctx context.Context, b *bot.Bot, data string, chatID int64, messageID int) {
+func (bm *BotManager) handlePeriodicityCallback(ctx context.Context, b *bot.Bot, data string, chatID int64, messageID int) {
 	parts := strings.Split(data, ":")
 	if len(parts) < 3 {
 		return
@@ -603,25 +636,25 @@ func (bm BotManager) handlePeriodicityCallback(ctx context.Context, b *bot.Bot, 
 		return
 	}
 
-	event, err := bm.eventsRepo.EventByID(ctx, eventID)
+	event, err := bm.EventsRepo.EventByID(ctx, eventID)
 	if err != nil || event == nil {
 		_, err := b.SendMessage(ctx, &bot.SendMessageParams{
 			ChatID: chatID,
 			Text:   "❌ Ошибка: событие не найдено",
 		})
-		bm.onError(err)
+		bm.OnError(err)
 		return
 	}
 
 	if periodType != "none" && periodType != "weekdays" {
-		count, err := bm.eventsRepo.CountUserPeriodicEvents(ctx, chatID)
+		count, err := bm.EventsRepo.CountUserPeriodicEvents(ctx, chatID)
 		if err != nil {
 			bm.Errorf("Ошибка подсчёта событий: %v", err)
 			_, err := b.SendMessage(ctx, &bot.SendMessageParams{
 				ChatID: chatID,
 				Text:   "❌ Не удалось проверить количество событий",
 			})
-			bm.onError(err)
+			bm.OnError(err)
 			return
 		}
 
@@ -630,12 +663,12 @@ func (bm BotManager) handlePeriodicityCallback(ctx context.Context, b *bot.Bot, 
 				ChatID: chatID,
 				Text:   "⚠️ Превышен лимит: максимум 100 периодических напоминаний на одного пользователя.",
 			})
-			bm.onError(err)
+			bm.OnError(err)
 			_, err = b.DeleteMessage(ctx, &bot.DeleteMessageParams{
 				ChatID:    chatID,
 				MessageID: messageID,
 			})
-			bm.onError(err)
+			bm.OnError(err)
 			return
 		}
 	}
@@ -646,33 +679,33 @@ func (bm BotManager) handlePeriodicityCallback(ctx context.Context, b *bot.Bot, 
 			ChatID: chatID,
 			Text:   "✅ Событие добавлено без повтора!",
 		})
-		bm.onError(err)
+		bm.OnError(err)
 		_, err = b.DeleteMessage(ctx, &bot.DeleteMessageParams{
 			ChatID:    chatID,
 			MessageID: messageID,
 		})
-		bm.onError(err)
+		bm.OnError(err)
 		return
 
 	case "weekdays":
 		err := bm.askForWeekdays(ctx, chatID, eventID, event.Weekdays)
-		bm.onError(err)
+		bm.OnError(err)
 		_, err = b.DeleteMessage(ctx, &bot.DeleteMessageParams{
 			ChatID:    chatID,
 			MessageID: messageID,
 		})
-		bm.onError(err)
+		bm.OnError(err)
 		return
 
 	default:
 		event.Periodicity = &periodType
-		_, err = bm.eventsRepo.UpdateEvent(ctx, event, db.WithColumns("periodicity"))
+		_, err = bm.EventsRepo.UpdateEvent(ctx, event, db.WithColumns("periodicity"))
 		if err != nil {
 			_, err := b.SendMessage(ctx, &bot.SendMessageParams{
 				ChatID: chatID,
 				Text:   "❌ Ошибка обновления события",
 			})
-			bm.onError(err)
+			bm.OnError(err)
 			return
 		}
 	}
@@ -682,15 +715,15 @@ func (bm BotManager) handlePeriodicityCallback(ctx context.Context, b *bot.Bot, 
 		ChatID: chatID,
 		Text:   fmt.Sprintf("✅ Событие добавлено! %s", periodicityText),
 	})
-	bm.onError(err)
+	bm.OnError(err)
 	_, err = b.DeleteMessage(ctx, &bot.DeleteMessageParams{
 		ChatID:    chatID,
 		MessageID: messageID,
 	})
-	bm.onError(err)
+	bm.OnError(err)
 }
 
-func (bm BotManager) handleWeekdayCallback(ctx context.Context, b *bot.Bot, data string, chatID int64, messageID int) {
+func (bm *BotManager) handleWeekdayCallback(ctx context.Context, b *bot.Bot, data string, chatID int64, messageID int) {
 	parts := strings.Split(data, ":")
 	if len(parts) < 3 {
 		return
@@ -702,7 +735,7 @@ func (bm BotManager) handleWeekdayCallback(ctx context.Context, b *bot.Bot, data
 		return
 	}
 
-	event, err := bm.eventsRepo.EventByID(ctx, eventID)
+	event, err := bm.EventsRepo.EventByID(ctx, eventID)
 	if err != nil || event == nil {
 		return
 	}
@@ -715,7 +748,7 @@ func (bm BotManager) handleWeekdayCallback(ctx context.Context, b *bot.Bot, data
 	newWeekdays := toggleDayInSlice(event.Weekdays, day)
 	event.Weekdays = newWeekdays
 
-	_, err = bm.eventsRepo.UpdateEvent(ctx, event, db.WithColumns("weekdays"))
+	_, err = bm.EventsRepo.UpdateEvent(ctx, event, db.WithColumns("weekdays"))
 	if err != nil {
 		bm.Errorf("Ошибка обновления дней недели для события %d: %v", eventID, err)
 		return
@@ -727,10 +760,10 @@ func (bm BotManager) handleWeekdayCallback(ctx context.Context, b *bot.Bot, data
 		MessageID:   messageID,
 		ReplyMarkup: keyboard,
 	})
-	bm.onError(err)
+	bm.OnError(err)
 }
 
-func (bm BotManager) handleWeekdaysDoneCallback(ctx context.Context, b *bot.Bot, data string, chatID int64, messageID int) {
+func (bm *BotManager) handleWeekdaysDoneCallback(ctx context.Context, b *bot.Bot, data string, chatID int64, messageID int) {
 	parts := strings.Split(data, ":")
 	if len(parts) < 2 {
 		return
@@ -741,13 +774,13 @@ func (bm BotManager) handleWeekdaysDoneCallback(ctx context.Context, b *bot.Bot,
 		return
 	}
 
-	event, err := bm.eventsRepo.EventByID(ctx, eventID)
+	event, err := bm.EventsRepo.EventByID(ctx, eventID)
 	if err != nil || event == nil {
 		_, err := b.SendMessage(ctx, &bot.SendMessageParams{
 			ChatID: chatID,
 			Text:   "❌ Ошибка: событие не найдено",
 		})
-		bm.onError(err)
+		bm.OnError(err)
 		return
 	}
 
@@ -756,37 +789,37 @@ func (bm BotManager) handleWeekdaysDoneCallback(ctx context.Context, b *bot.Bot,
 			ChatID: chatID,
 			Text:   "❌ Выберите хотя бы один день недели",
 		})
-		bm.onError(err)
+		bm.OnError(err)
 		return
 	}
 
 	periodicity := db.PeriodicityWeekdays
 	event.Periodicity = &periodicity
-	_, err = bm.eventsRepo.UpdateEvent(ctx, event, db.WithColumns("periodicity", "weekdays"))
+	_, err = bm.EventsRepo.UpdateEvent(ctx, event, db.WithColumns("periodicity", "weekdays"))
 	if err != nil {
 		_, err := b.SendMessage(ctx, &bot.SendMessageParams{
 			ChatID: chatID,
 			Text:   "❌ Ошибка обновления события",
 		})
-		bm.onError(err)
+		bm.OnError(err)
 		return
 	}
 
 	var daysNames []string
 	for _, day := range event.Weekdays {
-		daysNames = append(daysNames, dayName(day))
+		daysNames = append(daysNames, DayName(day))
 	}
 
 	_, err = b.SendMessage(ctx, &bot.SendMessageParams{
 		ChatID: chatID,
 		Text:   fmt.Sprintf("✅ Событие добавлено! 🔄 По дням: %s", strings.Join(daysNames, ", ")),
 	})
-	bm.onError(err)
+	bm.OnError(err)
 	_, err = b.DeleteMessage(ctx, &bot.DeleteMessageParams{
 		ChatID:    chatID,
 		MessageID: messageID,
 	})
-	bm.onError(err)
+	bm.OnError(err)
 }
 
 func toggleDayInSlice(slice []int, day int) []int {
@@ -815,8 +848,8 @@ func getPeriodicityText(periodType string) string {
 	}
 }
 
-func (bm BotManager) DeleteEventByID(ctx context.Context, id int) error {
-	event, err := bm.eventsRepo.EventByID(ctx, id)
+func (bm *BotManager) DeleteEventByID(ctx context.Context, id int) error {
+	event, err := bm.EventsRepo.EventByID(ctx, id)
 	if err != nil {
 		return err
 	}
@@ -825,7 +858,7 @@ func (bm BotManager) DeleteEventByID(ctx context.Context, id int) error {
 		return fmt.Errorf("event not found")
 	}
 
-	deleted, err := bm.eventsRepo.DeleteEvent(ctx, id)
+	deleted, err := bm.EventsRepo.DeleteEvent(ctx, id)
 	if err != nil {
 		return err
 	}
@@ -837,13 +870,13 @@ func (bm BotManager) DeleteEventByID(ctx context.Context, id int) error {
 	return nil
 }
 
-func (bm BotManager) GetUserEvents(ctx context.Context, chatID int64) ([]model.Event, error) {
+func (bm *BotManager) GetUserEvents(ctx context.Context, chatID int64) ([]model.Event, error) {
 	statusId := db.StatusEnabled
 	search := &db.EventSearch{
 		UserTgID: &chatID,
 		StatusID: &statusId,
 	}
-	dbEvents, err := bm.eventsRepo.EventsByFilters(ctx, search, db.PagerNoLimit)
+	dbEvents, err := bm.EventsRepo.EventsByFilters(ctx, search, db.PagerNoLimit)
 	if err != nil {
 		return nil, err
 	}
@@ -855,8 +888,8 @@ func (bm BotManager) GetUserEvents(ctx context.Context, chatID int64) ([]model.E
 	return model.NewEvents(dbEvents), nil
 }
 
-func (bm BotManager) GetEventByID(ctx context.Context, id int) (*model.Event, error) {
-	dbEvent, err := bm.eventsRepo.EventByID(ctx, id)
+func (bm *BotManager) GetEventByID(ctx context.Context, id int) (*model.Event, error) {
+	dbEvent, err := bm.EventsRepo.EventByID(ctx, id)
 	if err != nil {
 		return nil, err
 	}
@@ -875,8 +908,8 @@ var (
 	ErrPastDate     = errors.New("past_date")
 )
 
-func (bm BotManager) SnoozeEvent(ctx context.Context, eventID int, userTgID int64, newTime time.Time) error {
-	event, err := bm.eventsRepo.EventByID(ctx, eventID)
+func (bm *BotManager) SnoozeEvent(ctx context.Context, eventID int, userTgID int64, newTime time.Time) error {
+	event, err := bm.EventsRepo.EventByID(ctx, eventID)
 	if err != nil {
 		return err
 	}
@@ -897,10 +930,668 @@ func (bm BotManager) SnoozeEvent(ctx context.Context, eventID int, userTgID int6
 	}
 
 	event.SendAt = newTime
-	_, err = bm.eventsRepo.UpdateEvent(ctx, event, db.WithColumns(db.Columns.Event.SendAt))
+	_, err = bm.EventsRepo.UpdateEvent(ctx, event, db.WithColumns(db.Columns.Event.SendAt))
 	if err != nil {
 		return err
 	}
 
 	return nil
+}
+func (bm *BotManager) HandleEventDetail(ctx context.Context, b *bot.Bot, data string, chatID int64, messageID int) {
+	eventIDStr := strings.TrimPrefix(data, EventDetailPrefix)
+	eventID, err := strconv.Atoi(eventIDStr)
+	if err != nil {
+		return
+	}
+
+	event, err := bm.EventsRepo.EventByID(ctx, eventID)
+	if err != nil || event == nil {
+		_, err := b.SendMessage(ctx, &bot.SendMessageParams{
+			ChatID: chatID,
+			Text:   "❌ Событие не найдено",
+		})
+		bm.OnError(err)
+		return
+	}
+
+	if event.UserTgID != chatID {
+		_, err := b.SendMessage(ctx, &bot.SendMessageParams{
+			ChatID: chatID,
+			Text:   "❌ У вас нет доступа к этому событию",
+		})
+		bm.OnError(err)
+		return
+	}
+
+	var msg strings.Builder
+	msg.WriteString(fmt.Sprintf("📅 %s\n", event.SendAt.Format("2006-01-02 15:04")))
+	msg.WriteString(fmt.Sprintf("📝 %s\n", event.Message))
+
+	if event.Periodicity != nil {
+		switch *event.Periodicity {
+		case "hour":
+			msg.WriteString("🔄 Каждый час\n")
+		case "day":
+			msg.WriteString("🔄 Ежедневно\n")
+		case "week":
+			msg.WriteString("🔄 Еженедельно\n")
+		case "weekdays":
+			var days []string
+			for _, day := range event.Weekdays {
+				days = append(days, DayName(day))
+			}
+			msg.WriteString(fmt.Sprintf("🔄 По дням: %s\n", strings.Join(days, ", ")))
+		}
+	} else {
+		msg.WriteString("⏹️ Без повтора\n")
+	}
+
+	msg.WriteString("\nВыберите действие:")
+
+	keyboard := &models.InlineKeyboardMarkup{
+		InlineKeyboard: [][]models.InlineKeyboardButton{
+			{
+				{Text: "✏️ Изменить", CallbackData: fmt.Sprintf("%s%d", eventEditPrefix, eventID)},
+				{Text: "🗑️ Удалить", CallbackData: fmt.Sprintf("%s%d", eventDeletePrefix, eventID)},
+			},
+			{
+				{Text: "◀️ Назад", CallbackData: eventBackToList},
+			},
+		},
+	}
+
+	_, err = b.EditMessageText(ctx, &bot.EditMessageTextParams{
+		ChatID:      chatID,
+		MessageID:   messageID,
+		Text:        msg.String(),
+		ReplyMarkup: keyboard,
+	})
+	bm.OnError(err)
+}
+
+func (bm *BotManager) HandleEventEdit(ctx context.Context, b *bot.Bot, data string, chatID int64, messageID int) {
+	eventIDStr := strings.TrimPrefix(data, eventEditPrefix)
+	eventID, err := strconv.Atoi(eventIDStr)
+	if err != nil {
+		return
+	}
+
+	keyboard := &models.InlineKeyboardMarkup{
+		InlineKeyboard: [][]models.InlineKeyboardButton{
+			{{Text: "📅 Дата", CallbackData: fmt.Sprintf("%s%d", editDatePrefix, eventID)}},
+			{{Text: "📝 Описание", CallbackData: fmt.Sprintf("%s%d", editDescPrefix, eventID)}},
+			{{Text: "🔄 Периодичность", CallbackData: fmt.Sprintf("%s%d", editPeriodicityPrefix, eventID)}},
+			{{Text: "◀️ Назад", CallbackData: fmt.Sprintf("%s%d", EventDetailPrefix, eventID)}},
+		},
+	}
+
+	_, err = b.EditMessageText(ctx, &bot.EditMessageTextParams{
+		ChatID:      chatID,
+		MessageID:   messageID,
+		Text:        "Выберите, что хотите изменить:",
+		ReplyMarkup: keyboard,
+	})
+	bm.OnError(err)
+}
+
+func (bm *BotManager) HandleEventDelete(ctx context.Context, b *bot.Bot, data string, chatID int64, messageID int) {
+	eventIDStr := strings.TrimPrefix(data, eventDeletePrefix)
+	eventID, err := strconv.Atoi(eventIDStr)
+	if err != nil {
+		return
+	}
+
+	event, err := bm.EventsRepo.EventByID(ctx, eventID)
+	if err != nil || event == nil {
+		_, err := b.SendMessage(ctx, &bot.SendMessageParams{
+			ChatID: chatID,
+			Text:   "❌ Событие не найдено",
+		})
+		bm.OnError(err)
+		return
+	}
+
+	if event.UserTgID != chatID {
+		_, err := b.SendMessage(ctx, &bot.SendMessageParams{
+			ChatID: chatID,
+			Text:   "❌ У вас нет доступа к этому событию",
+		})
+		bm.OnError(err)
+		return
+	}
+
+	_, err = bm.EventsRepo.DeleteEvent(ctx, eventID)
+	if err != nil {
+		_, err := b.SendMessage(ctx, &bot.SendMessageParams{
+			ChatID: chatID,
+			Text:   "❌ Ошибка при удалении события",
+		})
+		bm.OnError(err)
+		return
+	}
+
+	_, err = b.EditMessageText(ctx, &bot.EditMessageTextParams{
+		ChatID:    chatID,
+		MessageID: messageID,
+		Text:      "✅ Событие удалено!",
+	})
+	bm.OnError(err)
+}
+
+func (bm *BotManager) HandleBackToList(ctx context.Context, b *bot.Bot, chatID int64, messageID int) {
+	page := 1
+	pageSize := 10
+
+	events, err := bm.GetUserEvents(ctx, chatID)
+	if err != nil {
+		bm.Errorf("Ошибка загрузки событий: %v", err)
+		_, err = b.SendMessage(ctx, &bot.SendMessageParams{
+			ChatID: chatID,
+			Text:   "❌ Ошибка при загрузке событий",
+		})
+		bm.OnError(err)
+		return
+	}
+
+	if len(events) == 0 {
+		_, err = b.EditMessageText(ctx, &bot.EditMessageTextParams{
+			ChatID:    chatID,
+			MessageID: messageID,
+			Text:      "🔍 Нет событий",
+		})
+		bm.OnError(err)
+		return
+	}
+
+	total := len(events)
+	start := (page - 1) * pageSize
+	end := start + pageSize
+	if end > total {
+		end = total
+	}
+
+	pageEvents := events[start:end]
+
+	periodicCount, err := bm.EventsRepo.CountUserPeriodicEvents(ctx, chatID)
+	if err != nil {
+		bm.Errorf("Ошибка подсчета периодических событий: %v", err)
+		periodicCount = 0
+	}
+
+	var msg strings.Builder
+	msg.WriteString("📅 Список событий:\n\n")
+	msg.WriteString(fmt.Sprintf("📊 Периодических уведомлений: %d/%d\n\n", periodicCount, MaxPeriodic))
+
+	for i, e := range pageEvents {
+		msg.WriteString(fmt.Sprintf("%d. %s — ", start+i+1, e.Text))
+		msg.WriteString(fmt.Sprintf("%s\n", e.DateTime.Format("2006-01-02 15:04")))
+
+		if e.Periodicity != nil {
+			switch *e.Periodicity {
+			case "hour":
+				msg.WriteString("🔄 Каждый час\n")
+			case "day":
+				msg.WriteString("🔄 Ежедневно\n")
+			case "week":
+				msg.WriteString("🔄 Еженедельно\n")
+			case "weekdays":
+				var days []string
+				for _, day := range e.Weekdays {
+					days = append(days, DayName(day))
+				}
+				msg.WriteString(fmt.Sprintf("🔄 По дням: %s\n", strings.Join(days, ", ")))
+			}
+		} else {
+			msg.WriteString("⏹️ Без повтора\n")
+		}
+	}
+
+	var buttons [][]models.InlineKeyboardButton
+
+	var row []models.InlineKeyboardButton
+	for i := range pageEvents {
+		eventNum := start + i + 1
+		row = append(row, models.InlineKeyboardButton{
+			Text:         fmt.Sprintf("%d", eventNum),
+			CallbackData: fmt.Sprintf("%s%d", EventDetailPrefix, pageEvents[i].ID),
+		})
+
+		if len(row) == 5 {
+			buttons = append(buttons, row)
+			row = []models.InlineKeyboardButton{}
+		}
+	}
+	if len(row) > 0 {
+		buttons = append(buttons, row)
+	}
+
+	var navRow []models.InlineKeyboardButton
+	if page > 1 {
+		navRow = append(navRow, models.InlineKeyboardButton{
+			Text:         "⬅️ Назад",
+			CallbackData: fmt.Sprintf("page_%d", page-1),
+		})
+	}
+	if end < total {
+		navRow = append(navRow, models.InlineKeyboardButton{
+			Text:         "➡️ Далее",
+			CallbackData: fmt.Sprintf("page_%d", page+1),
+		})
+	}
+	if len(navRow) > 0 {
+		buttons = append(buttons, navRow)
+	}
+
+	_, err = b.EditMessageText(ctx, &bot.EditMessageTextParams{
+		ChatID:    chatID,
+		MessageID: messageID,
+		Text:      msg.String(),
+		ReplyMarkup: &models.InlineKeyboardMarkup{
+			InlineKeyboard: buttons,
+		},
+	})
+	bm.OnError(err)
+}
+func (bm *BotManager) HandleEditDate(ctx context.Context, b *bot.Bot, data string, chatID int64, messageID int) {
+	eventIDStr := strings.TrimPrefix(data, editDatePrefix)
+	eventID, err := strconv.Atoi(eventIDStr)
+	if err != nil {
+		return
+	}
+
+	keyboard := &models.InlineKeyboardMarkup{
+		InlineKeyboard: [][]models.InlineKeyboardButton{
+			{{Text: "⏰ Перенести на час", CallbackData: fmt.Sprintf("%s%d", postponeHour, eventID)}},
+			{{Text: "📅 Перенести на день", CallbackData: fmt.Sprintf("%s%d", postponeDay, eventID)}},
+			{{Text: "📆 Перенести на неделю", CallbackData: fmt.Sprintf("%s%d", postponeWeek, eventID)}},
+			{{Text: "✍️ Ввести свою дату", CallbackData: fmt.Sprintf("%s%d", postponeCustom, eventID)}},
+			{{Text: "◀️ Назад", CallbackData: fmt.Sprintf("%s%d", eventEditPrefix, eventID)}},
+		},
+	}
+
+	_, err = b.EditMessageText(ctx, &bot.EditMessageTextParams{
+		ChatID:      chatID,
+		MessageID:   messageID,
+		Text:        "Выберите действие:",
+		ReplyMarkup: keyboard,
+	})
+	bm.OnError(err)
+}
+
+func (bm *BotManager) HandlePostpone(ctx context.Context, b *bot.Bot, data string, chatID int64, messageID int) {
+	var duration time.Duration
+	var eventID int
+	var err error
+
+	if strings.HasPrefix(data, postponeHour) {
+		eventIDStr := strings.TrimPrefix(data, postponeHour)
+		eventID, err = strconv.Atoi(eventIDStr)
+		duration = time.Hour
+	} else if strings.HasPrefix(data, postponeDay) {
+		eventIDStr := strings.TrimPrefix(data, postponeDay)
+		eventID, err = strconv.Atoi(eventIDStr)
+		duration = 24 * time.Hour
+	} else if strings.HasPrefix(data, postponeWeek) {
+		eventIDStr := strings.TrimPrefix(data, postponeWeek)
+		eventID, err = strconv.Atoi(eventIDStr)
+		duration = 7 * 24 * time.Hour
+	}
+
+	if err != nil {
+		return
+	}
+
+	event, err := bm.EventsRepo.EventByID(ctx, eventID)
+	if err != nil || event == nil {
+		_, err := b.SendMessage(ctx, &bot.SendMessageParams{
+			ChatID: chatID,
+			Text:   "❌ Событие не найдено",
+		})
+		bm.OnError(err)
+		return
+	}
+
+	if event.UserTgID != chatID {
+		_, err := b.SendMessage(ctx, &bot.SendMessageParams{
+			ChatID: chatID,
+			Text:   "❌ У вас нет доступа к этому событию",
+		})
+		bm.OnError(err)
+		return
+	}
+
+	newTime := event.SendAt.Add(duration)
+	event.SendAt = newTime
+
+	_, err = bm.EventsRepo.UpdateEvent(ctx, event, db.WithColumns(db.Columns.Event.SendAt))
+	if err != nil {
+		_, err := b.SendMessage(ctx, &bot.SendMessageParams{
+			ChatID: chatID,
+			Text:   "❌ Ошибка при обновлении события",
+		})
+		bm.OnError(err)
+		return
+	}
+
+	_, err = b.EditMessageText(ctx, &bot.EditMessageTextParams{
+		ChatID:    chatID,
+		MessageID: messageID,
+		Text:      fmt.Sprintf("✅ Дата изменена на %s", newTime.Format("2006-01-02 15:04")),
+	})
+	bm.OnError(err)
+}
+
+func (bm *BotManager) HandlePostponeCustom(ctx context.Context, b *bot.Bot, data string, chatID int64, messageID int) {
+	eventIDStr := strings.TrimPrefix(data, postponeCustom)
+	eventID, err := strconv.Atoi(eventIDStr)
+	if err != nil {
+		return
+	}
+
+	bm.Mu.Lock()
+	bm.EditStates[chatID] = &EditState{
+		EventID:    eventID,
+		WaitingFor: "custom_date",
+	}
+	bm.Mu.Unlock()
+
+	_, err = b.EditMessageText(ctx, &bot.EditMessageTextParams{
+		ChatID:    chatID,
+		MessageID: messageID,
+		Text:      "📅 Введите новую дату и время в формате:\nYYYY-MM-DD HH:MM\n\nНапример: 2025-12-31 23:59",
+	})
+	bm.OnError(err)
+}
+
+func (bm *BotManager) HandleEditDescription(ctx context.Context, b *bot.Bot, data string, chatID int64, messageID int) {
+	eventIDStr := strings.TrimPrefix(data, editDescPrefix)
+	eventID, err := strconv.Atoi(eventIDStr)
+	if err != nil {
+		return
+	}
+
+	bm.Mu.Lock()
+	bm.EditStates[chatID] = &EditState{
+		EventID:    eventID,
+		WaitingFor: "description",
+	}
+	bm.Mu.Unlock()
+
+	_, err = b.EditMessageText(ctx, &bot.EditMessageTextParams{
+		ChatID:    chatID,
+		MessageID: messageID,
+		Text:      "📝 Введите новое описание события (не более 200 символов):",
+	})
+	bm.OnError(err)
+}
+
+func (bm *BotManager) HandleEditPeriodicity(ctx context.Context, b *bot.Bot, data string, chatID int64, messageID int) {
+	eventIDStr := strings.TrimPrefix(data, editPeriodicityPrefix)
+	eventID, err := strconv.Atoi(eventIDStr)
+	if err != nil {
+		return
+	}
+
+	event, err := bm.EventsRepo.EventByID(ctx, eventID)
+	if err != nil || event == nil {
+		_, err := b.SendMessage(ctx, &bot.SendMessageParams{
+			ChatID: chatID,
+			Text:   "❌ Событие не найдено",
+		})
+		bm.OnError(err)
+		return
+	}
+
+	keyboard := &models.InlineKeyboardMarkup{
+		InlineKeyboard: [][]models.InlineKeyboardButton{
+			{{Text: "🕐 Каждый час", CallbackData: fmt.Sprintf("edit_period:hour:%d", eventID)}},
+			{{Text: "📅 Каждый день", CallbackData: fmt.Sprintf("edit_period:day:%d", eventID)}},
+			{{Text: "🗓️ Каждую неделю", CallbackData: fmt.Sprintf("edit_period:week:%d", eventID)}},
+			{{Text: "🔢 Выбранные дни недели", CallbackData: fmt.Sprintf("edit_period:weekdays:%d", eventID)}},
+			{{Text: "❌ Без повтора", CallbackData: fmt.Sprintf("edit_period:none:%d", eventID)}},
+			{{Text: "◀️ Назад", CallbackData: fmt.Sprintf("%s%d", eventEditPrefix, eventID)}},
+		},
+	}
+
+	_, err = b.EditMessageText(ctx, &bot.EditMessageTextParams{
+		ChatID:      chatID,
+		MessageID:   messageID,
+		Text:        "📅 Выберите периодичность уведомления:",
+		ReplyMarkup: keyboard,
+	})
+	bm.OnError(err)
+}
+
+func (bm *BotManager) HandleEditPeriodicityCallback(ctx context.Context, b *bot.Bot, data string, chatID int64, messageID int) {
+	parts := strings.Split(data, ":")
+	if len(parts) < 3 {
+		return
+	}
+
+	periodType := parts[1]
+	eventID, err := strconv.Atoi(parts[2])
+	if err != nil {
+		return
+	}
+
+	event, err := bm.EventsRepo.EventByID(ctx, eventID)
+	if err != nil || event == nil {
+		_, err := b.SendMessage(ctx, &bot.SendMessageParams{
+			ChatID: chatID,
+			Text:   "❌ Событие не найдено",
+		})
+		bm.OnError(err)
+		return
+	}
+
+	if event.UserTgID != chatID {
+		_, err := b.SendMessage(ctx, &bot.SendMessageParams{
+			ChatID: chatID,
+			Text:   "❌ У вас нет доступа к этому событию",
+		})
+		bm.OnError(err)
+		return
+	}
+
+	switch periodType {
+	case "none":
+		event.Periodicity = nil
+		event.Weekdays = []int{}
+		_, err = bm.EventsRepo.UpdateEvent(ctx, event, db.WithColumns("periodicity", "weekdays"))
+		if err != nil {
+			_, err := b.SendMessage(ctx, &bot.SendMessageParams{
+				ChatID: chatID,
+				Text:   "❌ Ошибка обновления события",
+			})
+			bm.OnError(err)
+			return
+		}
+
+		_, err = b.EditMessageText(ctx, &bot.EditMessageTextParams{
+			ChatID:    chatID,
+			MessageID: messageID,
+			Text:      "✅ Периодичность отключена!",
+		})
+		bm.OnError(err)
+		return
+
+	case "weekdays":
+		err := bm.askForWeekdaysEdit(ctx, b, chatID, messageID, eventID, event.Weekdays)
+		bm.OnError(err)
+		return
+
+	default:
+		event.Periodicity = &periodType
+		event.Weekdays = []int{}
+		_, err = bm.EventsRepo.UpdateEvent(ctx, event, db.WithColumns("periodicity", "weekdays"))
+		if err != nil {
+			_, err := b.SendMessage(ctx, &bot.SendMessageParams{
+				ChatID: chatID,
+				Text:   "❌ Ошибка обновления события",
+			})
+			bm.OnError(err)
+			return
+		}
+	}
+
+	periodicityText := getPeriodicityText(periodType)
+	_, err = b.EditMessageText(ctx, &bot.EditMessageTextParams{
+		ChatID:    chatID,
+		MessageID: messageID,
+		Text:      fmt.Sprintf("✅ Периодичность изменена! %s", periodicityText),
+	})
+	bm.OnError(err)
+}
+
+func (bm *BotManager) askForWeekdaysEdit(ctx context.Context, b *bot.Bot, chatID int64, messageID int, eventID int, selectedDays []int) error {
+	keyboard := bm.makeWeekdaysEditKeyboard(eventID, selectedDays)
+	_, err := b.EditMessageText(ctx, &bot.EditMessageTextParams{
+		ChatID:      chatID,
+		MessageID:   messageID,
+		Text:        "Выберите дни недели:",
+		ReplyMarkup: keyboard,
+	})
+	return err
+}
+
+func (bm *BotManager) makeWeekdaysEditKeyboard(eventID int, selectedDays []int) *models.InlineKeyboardMarkup {
+	res := &models.InlineKeyboardMarkup{InlineKeyboard: [][]models.InlineKeyboardButton{}}
+
+	for _, weekDay := range weekDays {
+		buttonText := weekDay.Name
+		dayInt, err := strconv.Atoi(weekDay.ID)
+		if err != nil {
+			bm.Errorf("Ошибка конвертации дня недели: %v", err)
+			continue
+		}
+
+		if slices.Contains(selectedDays, dayInt) {
+			buttonText = "✅ " + weekDay.Name
+		} else {
+			buttonText = "❌ " + weekDay.Name
+		}
+
+		res.InlineKeyboard = append(res.InlineKeyboard, []models.InlineKeyboardButton{{
+			Text:         buttonText,
+			CallbackData: fmt.Sprintf("edit_weekday:%s:%d", weekDay.ID, eventID),
+		}})
+	}
+
+	res.InlineKeyboard = append(res.InlineKeyboard, []models.InlineKeyboardButton{
+		{Text: "✅ Готово", CallbackData: fmt.Sprintf("edit_weekdays_done:%d", eventID)},
+	})
+
+	res.InlineKeyboard = append(res.InlineKeyboard, []models.InlineKeyboardButton{
+		{Text: "◀️ Назад", CallbackData: fmt.Sprintf("%s%d", editPeriodicityPrefix, eventID)},
+	})
+
+	return res
+}
+
+func (bm *BotManager) HandleEditWeekday(ctx context.Context, b *bot.Bot, data string, chatID int64, messageID int) {
+	parts := strings.Split(data, ":")
+	if len(parts) < 3 {
+		return
+	}
+
+	dayStr := parts[1]
+	eventID, err := strconv.Atoi(parts[2])
+	if err != nil {
+		return
+	}
+
+	event, err := bm.EventsRepo.EventByID(ctx, eventID)
+	if err != nil || event == nil {
+		return
+	}
+
+	if event.UserTgID != chatID {
+		return
+	}
+
+	day, err := strconv.Atoi(dayStr)
+	if err != nil {
+		return
+	}
+
+	newWeekdays := toggleDayInSlice(event.Weekdays, day)
+	event.Weekdays = newWeekdays
+
+	_, err = bm.EventsRepo.UpdateEvent(ctx, event, db.WithColumns("weekdays"))
+	if err != nil {
+		bm.Errorf("Ошибка обновления дней недели для события %d: %v", eventID, err)
+		return
+	}
+
+	keyboard := bm.makeWeekdaysEditKeyboard(eventID, newWeekdays)
+	_, err = b.EditMessageReplyMarkup(ctx, &bot.EditMessageReplyMarkupParams{
+		ChatID:      chatID,
+		MessageID:   messageID,
+		ReplyMarkup: keyboard,
+	})
+	bm.OnError(err)
+}
+
+func (bm *BotManager) HandleEditWeekdaysDone(ctx context.Context, b *bot.Bot, data string, chatID int64, messageID int) {
+	parts := strings.Split(data, ":")
+	if len(parts) < 2 {
+		return
+	}
+
+	eventID, err := strconv.Atoi(parts[1])
+	if err != nil {
+		return
+	}
+
+	event, err := bm.EventsRepo.EventByID(ctx, eventID)
+	if err != nil || event == nil {
+		_, err := b.SendMessage(ctx, &bot.SendMessageParams{
+			ChatID: chatID,
+			Text:   "❌ Ошибка: событие не найдено",
+		})
+		bm.OnError(err)
+		return
+	}
+
+	if event.UserTgID != chatID {
+		_, err := b.SendMessage(ctx, &bot.SendMessageParams{
+			ChatID: chatID,
+			Text:   "❌ У вас нет доступа к этому событию",
+		})
+		bm.OnError(err)
+		return
+	}
+
+	if len(event.Weekdays) == 0 {
+		_, err := b.SendMessage(ctx, &bot.SendMessageParams{
+			ChatID: chatID,
+			Text:   "❌ Выберите хотя бы один день недели",
+		})
+		bm.OnError(err)
+		return
+	}
+
+	periodicity := db.PeriodicityWeekdays
+	event.Periodicity = &periodicity
+	_, err = bm.EventsRepo.UpdateEvent(ctx, event, db.WithColumns("periodicity", "weekdays"))
+	if err != nil {
+		_, err := b.SendMessage(ctx, &bot.SendMessageParams{
+			ChatID: chatID,
+			Text:   "❌ Ошибка обновления события",
+		})
+		bm.OnError(err)
+		return
+	}
+
+	var daysNames []string
+	for _, day := range event.Weekdays {
+		daysNames = append(daysNames, DayName(day))
+	}
+
+	_, err = b.EditMessageText(ctx, &bot.EditMessageTextParams{
+		ChatID:    chatID,
+		MessageID: messageID,
+		Text:      fmt.Sprintf("✅ Периодичность изменена! 🔄 По дням: %s", strings.Join(daysNames, ", ")),
+	})
+	bm.OnError(err)
 }
