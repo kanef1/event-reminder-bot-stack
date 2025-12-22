@@ -77,7 +77,7 @@ func (rm *ReminderManager) CalculateNextTime(e model.ReminderEvent) *time.Time {
 
 	switch *e.Periodicity {
 	case "hour":
-		t := currentTime.Add(time.Minute)
+		t := currentTime.Add(time.Hour)
 		return &t
 	case "day":
 		t := currentTime.Add(24 * time.Hour)

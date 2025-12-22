@@ -174,23 +174,26 @@ func (bm *BotManager) DeleteHandler(ctx context.Context, b *bot.Bot, update *mod
 }
 
 func (bm *BotManager) GetUserEventsPaged(ctx context.Context, chatID int64, page int, pageSize int) ([]model.Event, int, error) {
-	events, err := bm.GetUserEvents(ctx, chatID)
+	statusId := db.StatusEnabled
+	search := &db.EventSearch{
+		UserTgID: &chatID,
+		StatusID: &statusId,
+	}
+
+	// Получаем общее количество событий
+	total, err := bm.EventsRepo.CountEvents(ctx, search)
 	if err != nil {
 		return nil, 0, err
 	}
 
-	total := len(events)
-	start := (page - 1) * pageSize
-	if start >= total {
-		return []model.Event{}, total, nil
+	// Получаем события с пагинацией
+	pager := db.NewPager(page, pageSize)
+	dbEvents, err := bm.EventsRepo.EventsByFilters(ctx, search, pager, bm.EventsRepo.DefaultEventSort())
+	if err != nil {
+		return nil, 0, err
 	}
 
-	end := start + pageSize
-	if end > total {
-		end = total
-	}
-
-	return events[start:end], total, nil
+	return model.NewEvents(dbEvents), total, nil
 }
 
 func (bm *BotManager) ListHandler(ctx context.Context, b *bot.Bot, update *models.Update) {
@@ -204,7 +207,7 @@ func (bm *BotManager) ListHandler(ctx context.Context, b *bot.Bot, update *model
 		}
 	}
 
-	events, err := bm.GetUserEvents(ctx, update.Message.Chat.ID)
+	events, total, err := bm.GetUserEventsPaged(ctx, update.Message.Chat.ID, page, pageSize)
 	if err != nil {
 		bm.Errorf("Ошибка загрузки событий: %v", err)
 		_, err = b.SendMessage(ctx, &bot.SendMessageParams{
@@ -223,19 +226,7 @@ func (bm *BotManager) ListHandler(ctx context.Context, b *bot.Bot, update *model
 		return
 	}
 
-	total := len(events)
 	start := (page - 1) * pageSize
-	if start >= total {
-		start = 0
-		page = 1
-	}
-
-	end := start + pageSize
-	if end > total {
-		end = total
-	}
-
-	pageEvents := events[start:end]
 
 	periodicCount, err := bm.EventsRepo.CountUserPeriodicEvents(ctx, update.Message.Chat.ID)
 	if err != nil {
@@ -247,7 +238,7 @@ func (bm *BotManager) ListHandler(ctx context.Context, b *bot.Bot, update *model
 	msg.WriteString("📅 Список событий:\n\n")
 	msg.WriteString(fmt.Sprintf("📊 Периодических уведомлений: %d/%d\n\n", periodicCount, MaxPeriodic))
 
-	for i, e := range pageEvents {
+	for i, e := range events {
 		msg.WriteString(fmt.Sprintf("%d. %s — ", start+i+1, e.Text))
 		msg.WriteString(fmt.Sprintf("%s\n", e.DateTime.Format("2006-01-02 15:04")))
 
@@ -274,11 +265,11 @@ func (bm *BotManager) ListHandler(ctx context.Context, b *bot.Bot, update *model
 	var buttons [][]models.InlineKeyboardButton
 
 	var row []models.InlineKeyboardButton
-	for i := range pageEvents {
+	for i := range events {
 		eventNum := start + i + 1
 		row = append(row, models.InlineKeyboardButton{
 			Text:         fmt.Sprintf("%d", eventNum),
-			CallbackData: fmt.Sprintf("%s%d", EventDetailPrefix, pageEvents[i].ID),
+			CallbackData: fmt.Sprintf("%s%d", EventDetailPrefix, events[i].ID),
 		})
 
 		if len(row) == 5 {
@@ -297,7 +288,7 @@ func (bm *BotManager) ListHandler(ctx context.Context, b *bot.Bot, update *model
 			CallbackData: fmt.Sprintf("page_%d", page-1),
 		})
 	}
-	if end < total {
+	if start+pageSize < total {
 		navRow = append(navRow, models.InlineKeyboardButton{
 			Text:         "➡️ Далее",
 			CallbackData: fmt.Sprintf("page_%d", page+1),
